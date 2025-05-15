@@ -1,0 +1,724 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Combobox, ComboboxLabel, ComboboxOption } from './Combobox';
+import TagSelector, { TagSelectorWithLabel } from './TagSelector';
+import { categoryDB, tagDB, walletDB } from '../utils/db';
+import DateRangePicker from './DateRangePicker';
+import Badge from './Badge';
+import { getColorName } from '../utils/colors';
+
+function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized = false }) {
+  const [formData, setFormData] = useState({
+    id: expense.id,
+    name: expense.name || '',
+    amount: expense.amount || '',
+    category: expense.category || 'food',
+    tags: expense.tags || [],
+    date: expense.date || new Date().toISOString().slice(0, 10),
+    time: expense.time || new Date().toTimeString().slice(0, 5),
+    walletId: expense.walletId || 'cash',
+    isIncome: expense.isIncome || false,
+    notes: expense.notes || '',
+    photoUrl: expense.photoUrl || ''
+  });
+  
+  const fileInputRef = useRef(null);
+  const [previewUrl, setPreviewUrl] = useState(expense.photoUrl || '');
+  
+  // Add state for date picker
+  const [activeDatePicker, setActiveDatePicker] = useState(null); // 'date' or null
+  
+  // Add state for time picker
+  const [activeTimePicker, setActiveTimePicker] = useState(null); // 'time' or null
+  
+  const [categories, setCategories] = useState([]);
+  const [tags, setTags] = useState([]);
+  const [wallets, setWallets] = useState([
+    { id: 'cash', name: 'Cash', type: 'cash', balance: 0 },
+    { id: 'bank', name: 'Bank Account', type: 'bank', balance: 0 },
+    { id: 'credit', name: 'Credit Card', type: 'credit_card', balance: 0 },
+    { id: 'ewallet', name: 'E-Wallet', type: 'e_wallet', balance: 0 },
+  ]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [categorySearchQuery, setCategorySearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState(
+    categories.find(cat => cat.id === expense.category) || null
+  );
+
+  // Load categories and tags
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        if (dbInitialized) {
+          // Load categories from IndexedDB
+          const categoryData = await categoryDB.getAll();
+          if (categoryData.length > 0) {
+            setCategories(categoryData);
+            // Set selected category
+            const selectedCat = categoryData.find(cat => cat.id === expense.category);
+            if (selectedCat) {
+              setSelectedCategory(selectedCat);
+            }
+          } else {
+            // Fallback to localStorage if no categories in IndexedDB
+            loadFromLocalStorage();
+          }
+
+          // Load tags from IndexedDB
+          const tagData = await tagDB.getAll();
+          if (tagData.length > 0) {
+            setTags(tagData);
+          } else {
+            // Fallback to localStorage if no tags in IndexedDB
+            loadTagsFromLocalStorage();
+          }
+
+          // Load wallets from IndexedDB
+          const walletData = await walletDB.getAll();
+          if (walletData.length > 0) {
+            setWallets(walletData);
+            setFormData(prev => ({ ...prev, walletId: prev.walletId || walletData[0].id }));
+          }
+        } else {
+          // Fallback to localStorage
+          loadFromLocalStorage();
+          loadTagsFromLocalStorage();
+        }
+      } catch (error) {
+        console.error('Error loading data:', error);
+        loadFromLocalStorage();
+        loadTagsFromLocalStorage();
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadData();
+  }, [dbInitialized, expense.category]);
+
+  // Load categories from localStorage if needed
+  const loadFromLocalStorage = () => {
+    const savedCategories = localStorage.getItem('expense-categories');
+    if (savedCategories) {
+      setCategories(JSON.parse(savedCategories));
+    }
+    // Load wallets
+    const savedWallets = localStorage.getItem('wallets');
+    if (savedWallets) {
+      const parsedWallets = JSON.parse(savedWallets);
+      setWallets(parsedWallets);
+      setFormData(prev => ({ ...prev, walletId: prev.walletId || parsedWallets[0].id }));
+    }
+  };
+
+  // Load tags from localStorage if needed
+  const loadTagsFromLocalStorage = () => {
+    const savedTags = localStorage.getItem('expense-tags');
+    if (savedTags) {
+      setTags(JSON.parse(savedTags));
+    } else {
+      // Default tags if none found
+      setTags([
+        { id: 'essential', name: 'Essential' },
+        { id: 'recurring', name: 'Recurring' },
+        { id: 'emergency', name: 'Emergency' },
+        { id: 'personal', name: 'Personal' },
+        { id: 'work', name: 'Work' }
+      ]);
+    }
+  };
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData({ ...formData, [name]: value });
+  };
+
+  const handleCategoryChange = (category) => {
+    setSelectedCategory(category);
+    setFormData({ ...formData, category: category.id });
+    setCategorySearchQuery(''); // Clear search when selecting
+  };
+
+  const handleTagsChange = (selectedTags) => {
+    setFormData(prev => ({
+      ...prev,
+      tags: selectedTags
+    }));
+  };
+
+  const handleWalletChange = (e) => {
+    setFormData({ ...formData, walletId: e.target.value.id });
+  };
+
+  const handleToggleType = () => {
+    setFormData({ ...formData, isIncome: !formData.isIncome });
+  };
+
+  const handlePhotoChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    // Check file type is image
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+    
+    // Check file size is less than 5MB
+    if (file.size > 5 * 1024 * 1024) {
+      alert('File size should be less than 5MB');
+      return;
+    }
+    
+    // Convert to base64 for storage
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setFormData({ ...formData, photoUrl: event.target.result });
+      setPreviewUrl(event.target.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removePhoto = () => {
+    setFormData({ ...formData, photoUrl: '' });
+    setPreviewUrl('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const takePicture = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleAddNewCategoryClick = () => {
+    setShowNewCategoryInput(true);
+  };
+
+  const handleNewCategoryInputChange = (e) => {
+    setNewCategoryName(e.target.value);
+  };
+
+  const handleSaveNewCategory = async () => {
+    if (!newCategoryName.trim()) return;
+
+    const newCategory = {
+      id: newCategoryName.trim().toLowerCase().replace(/\s+/g, '-'), // Simple ID generation
+      name: newCategoryName.trim(),
+    };
+
+    try {
+      if (dbInitialized) {
+        await categoryDB.add(newCategory);
+      } else {
+        // Fallback to localStorage
+        const updatedCategories = [...categories, newCategory];
+        setCategories(updatedCategories);
+        localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
+      }
+      setCategories(prev => [...prev, newCategory]);
+      setFormData(prev => ({ ...prev, category: newCategory.id })); // Select the new category
+      setNewCategoryName('');
+      setShowNewCategoryInput(false);
+    } catch (error) {
+      console.error('Error adding new category:', error);
+      alert('Failed to add new category.');
+    }
+  };
+
+  const handleCancelNewCategory = () => {
+    setNewCategoryName('');
+    setShowNewCategoryInput(false);
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    
+    // Simple validation
+    if (!formData.name.trim() || !formData.amount || isNaN(formData.amount)) {
+      alert('Please enter valid details');
+      return;
+    }
+
+    // Save changes
+    onSave({
+      ...formData,
+      amount: parseFloat(formData.amount),
+      walletId: formData.walletId,
+      isIncome: formData.isIncome,
+      notes: formData.notes,
+      photoUrl: formData.photoUrl
+    });
+  };
+
+  // Format a date string as a human-readable date
+  const formatDateForDisplay = (date) => {
+    if (!date) return '';
+    const dateObj = typeof date === 'string' ? new Date(date) : date;
+    return dateObj.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric' 
+    });
+  };
+  
+  // Format a time string for display (convert 24h to 12h format)
+  const formatTimeForDisplay = (time) => {
+    if (!time) return '';
+    const [hours, minutes] = time.split(':');
+    const h = parseInt(hours, 10);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const hour12 = h % 12 || 12;
+    return `${hour12}:${minutes} ${ampm}`;
+  };
+  
+  // Generate hours for time picker (00-23)
+  const hours = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0'));
+  
+  // Generate minutes for time picker (00-59)
+  const minutes = Array.from({ length: 60 }, (_, i) => i.toString().padStart(2, '0'));
+  
+  // Handle time selection
+  const handleTimeSelect = (hour, minute) => {
+    const newTime = `${hour}:${minute}`;
+    setFormData(prev => ({
+      ...prev,
+      time: newTime
+    }));
+    setActiveTimePicker(null);
+  };
+
+  const handleCategorySearchChange = (e) => {
+    const query = e.target.value.toLowerCase();
+    setCategorySearchQuery(query);
+  };
+
+  // Filter categories based on search query
+  const filteredCategories = categories.filter(category =>
+    category.name.toLowerCase().includes(categorySearchQuery.toLowerCase())
+  );
+
+  // Get category color
+  const getCategoryColor = (category) => {
+    if (!category) return 'gray';
+    return getColorName(category.color);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-gray-800 rounded-lg shadow-lg p-6">
+          <div className="flex justify-center items-center">
+            <div className="text-indigo-400">
+              <svg className="animate-spin h-8 w-8 mr-3" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </div>
+            <p className="text-indigo-300">Loading...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-800 rounded-lg shadow-lg w-full max-w-md flex flex-col h-[80vh]">
+        {/* Sticky header */}
+        <div className="sticky top-0 left-0 right-0 px-6 py-4 bg-gray-800 border-b border-gray-700 z-10">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-semibold text-indigo-300">
+              Edit {formData.isIncome ? 'Income' : 'Expense'}
+            </h2>
+            <button
+              type="button"
+              className="text-gray-400 hover:text-white p-2 rounded-full bg-gray-700 bg-opacity-50"
+              onClick={onCancel}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        
+        <div className="p-6 pt-2 flex-1 overflow-auto">
+          <div className="mb-4">
+            <div className="flex bg-gray-700 rounded-md p-1">
+              <button
+                type="button"
+                className={`flex-1 py-2 px-4 rounded ${!formData.isIncome ? 'bg-indigo-600 text-white' : 'text-gray-300'}`}
+                onClick={() => !formData.isIncome || handleToggleType()}
+              >
+                Expense
+              </button>
+              <button
+                type="button"
+                className={`flex-1 py-2 px-4 rounded ${formData.isIncome ? 'bg-green-600 text-white' : 'text-gray-300'}`}
+                onClick={() => formData.isIncome || handleToggleType()}
+              >
+                Income
+              </button>
+            </div>
+          </div>
+          
+          <form onSubmit={handleSubmit}>
+            <div className="mb-6">
+              <label htmlFor="name" className="block mb-2 font-medium text-gray-300">
+                {formData.isIncome ? 'Income' : 'Expense'} Name
+              </label>
+              <input
+                type="text"
+                id="name"
+                name="name"
+                value={formData.name}
+                onChange={handleChange}
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                required
+              />
+            </div>
+            
+            <div className="mb-6">
+              <label htmlFor="amount" className="block mb-2 font-medium text-gray-300">Amount (Rp)</label>
+              <input
+                type="number"
+                id="amount"
+                name="amount"
+                value={formData.amount}
+                onChange={handleChange}
+                placeholder="0"
+                step="1000"
+                min="1000"
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                required
+              />
+            </div>
+            
+            {/* Date and Time fields */}
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              <div className="relative">
+                <label htmlFor="date" className="block mb-2 font-medium text-gray-300">Date</label>
+                <input
+                  type="text"
+                  id="date"
+                  className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                  placeholder="Select date"
+                  readOnly
+                  value={formData.date ? formatDateForDisplay(formData.date) : ''}
+                  onClick={() => setActiveDatePicker('date')}
+                />
+                {activeDatePicker === 'date' && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 date-picker-container">
+                    <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4">
+                      <div className="flex justify-between items-center mb-4">
+                        <h4 className="text-lg font-medium text-white">Select Date</h4>
+                        <button
+                          type="button"
+                          className="text-gray-400 hover:text-white p-2 rounded-full"
+                          onClick={() => setActiveDatePicker(null)}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                      <DateRangePicker
+                        value={{
+                          start: formData.date ? new Date(formData.date) : null,
+                          end: null
+                        }}
+                        onChange={(range) => {
+                          if (range.start) {
+                            const dateString = range.start.toISOString().slice(0, 10);
+                            setFormData(prev => ({
+                              ...prev,
+                              date: dateString
+                            }));
+                          }
+                          setActiveDatePicker(null);
+                        }}
+                        onClose={() => setActiveDatePicker(null)}
+                        isSingleDatePicker={true}
+                        pickerLabel="Select Date"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="relative">
+                <label htmlFor="time" className="block mb-2 font-medium text-gray-300">Time</label>
+                <input
+                  type="text"
+                  id="time"
+                  className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                  placeholder="Select time"
+                  readOnly
+                  value={formData.time ? formatTimeForDisplay(formData.time) : ''}
+                  onClick={() => setActiveTimePicker('time')}
+                />
+                {activeTimePicker === 'time' && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 time-picker-container">
+                    <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4">
+                      <div className="flex justify-between items-center mb-4">
+                        <h4 className="text-lg font-medium text-white">Select Time</h4>
+                        <button
+                          type="button"
+                          className="text-gray-400 hover:text-white p-2 rounded-full"
+                          onClick={() => setActiveTimePicker(null)}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                      
+                      <div className="flex justify-between p-4 bg-gray-700 rounded-lg">
+                        {/* Hours */}
+                        <div className="space-y-2 max-h-60 overflow-y-auto w-1/2 pr-2">
+                          <p className="text-xs font-semibold text-gray-300 px-2">Hour</p>
+                          <ul className="space-y-1">
+                            {hours.map(hour => (
+                              <li key={`hour-${hour}`}>
+                                <button 
+                                  type="button" 
+                                  className={`w-full text-left px-2 py-1 hover:bg-indigo-600 hover:text-white rounded ${
+                                    formData.time && formData.time.split(':')[0] === hour 
+                                      ? 'bg-indigo-600 text-white' 
+                                      : 'text-gray-300'
+                                  }`}
+                                  onClick={() => handleTimeSelect(hour, formData.time.split(':')[1] || '00')}
+                                >
+                                  {hour}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        
+                        {/* Minutes */}
+                        <div className="space-y-2 max-h-60 overflow-y-auto w-1/2 pl-2">
+                          <p className="text-xs font-semibold text-gray-300 px-2">Minute</p>
+                          <ul className="space-y-1">
+                            {minutes.map(minute => (
+                              <li key={`minute-${minute}`}>
+                                <button 
+                                  type="button" 
+                                  className={`w-full text-left px-2 py-1 hover:bg-indigo-600 hover:text-white rounded ${
+                                    formData.time && formData.time.split(':')[1] === minute 
+                                      ? 'bg-indigo-600 text-white' 
+                                      : 'text-gray-300'
+                                  }`}
+                                  onClick={() => handleTimeSelect(formData.time.split(':')[0] || '00', minute)}
+                                >
+                                  {minute}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            {/* Wallet */}
+            <div className="mb-6">
+              <label htmlFor="wallet" className="block mb-2 font-medium text-gray-300">Wallet</label>
+              {wallets.length > 0 ? (
+                <Combobox
+                  name="wallet"
+                  options={wallets}
+                  displayValue={(wallet) => wallet?.name}
+                  defaultValue={wallets.find(w => w.id === formData.walletId)}
+                  onChange={handleWalletChange}
+                  aria-label="Wallet"
+                >
+                  {(wallet) => (
+                    <ComboboxOption value={wallet}>
+                      <ComboboxLabel>{wallet.name}</ComboboxLabel>
+                    </ComboboxOption>
+                  )}
+                </Combobox>
+              ) : (
+                <div className="text-gray-400 py-2">
+                  No wallets available. Please add some in Wallets.
+                </div>
+              )}
+            </div>
+
+            {/* Category */}
+            <div className="mb-6">
+              <div className="flex justify-between items-center mb-2">
+                <label htmlFor="category" className="font-medium text-gray-300">Category</label>
+                {!showNewCategoryInput && (
+                  <button
+                    type="button"
+                    className="text-xs px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition-colors"
+                    onClick={handleAddNewCategoryClick}
+                  >
+                    + New Category
+                  </button>
+                )}
+              </div>
+              {showNewCategoryInput ? (
+                <input
+                  type="text"
+                  value={newCategoryName}
+                  onChange={handleNewCategoryInputChange}
+                  placeholder="New category name"
+                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  autoFocus
+                />
+              ) : (
+                <div className="space-y-4">
+                  <div className="relative mb-4">
+                    <input
+                      type="text"
+                      value={categorySearchQuery}
+                      onChange={handleCategorySearchChange}
+                      placeholder="Search categories..."
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  {categories.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {filteredCategories.map((category) => (
+                        <Badge
+                          key={category.id}
+                          color={getCategoryColor(category)}
+                          className={selectedCategory?.id === category.id ? 'ring-2 ring-offset-2 ring-offset-gray-800 ring-indigo-500' : ''}
+                          onClick={() => handleCategoryChange(category)}
+                        >
+                          {category.name}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-gray-400 py-2">
+                      No categories available. Please add some in Settings.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="mb-6">
+              <TagSelectorWithLabel
+                selectedTags={formData.tags}
+                availableTags={tags}
+                onChange={handleTagsChange}
+                id="tags"
+                dbInitialized={dbInitialized}
+              />
+            </div>
+            
+            <div className="mb-6">
+              <label htmlFor="notes" className="block mb-2 font-medium text-gray-300">Notes (optional)</label>
+              <textarea
+                id="notes"
+                name="notes"
+                value={formData.notes}
+                onChange={handleChange}
+                placeholder="Add any additional details..."
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[80px]"
+              />
+            </div>
+            
+            <div className="mb-6">
+              <label className="block mb-2 font-medium text-gray-300">Photo (optional)</label>
+              <div className="flex gap-2 mb-2">
+                <button 
+                  type="button"
+                  onClick={takePicture}
+                  className="px-4 py-2 bg-gray-700 text-gray-300 rounded-md hover:bg-gray-600 flex items-center"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+                  </svg>
+                  {previewUrl ? 'Change Photo' : 'Take Photo'}
+                </button>
+                {previewUrl && (
+                  <button 
+                    type="button"
+                    onClick={removePhoto}
+                    className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+                  >
+                    Remove Photo
+                  </button>
+                )}
+              </div>
+              
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept="image/*"
+                capture="camera"
+                className="hidden"
+                onChange={handlePhotoChange}
+              />
+              
+              {previewUrl && (
+                <div className="mt-2 relative">
+                  <img 
+                    src={previewUrl} 
+                    alt="Preview" 
+                    className="max-h-48 rounded-md border border-gray-600" 
+                  />
+                </div>
+              )}
+            </div>
+            <div className="pb-20">
+              {/* Extra space at the bottom to ensure content isn't hidden behind the sticky footer */}
+            </div>
+          </form>
+        </div>
+        
+        {/* Sticky footer */}
+        <div className="sticky bottom-0 left-0 right-0 px-6 py-4 bg-gray-800 border-t border-gray-700 shadow-lg">
+          <div className="flex justify-between items-center">
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm('Are you sure you want to delete this transaction?')) {
+                  onDelete && onDelete(formData.id);
+                  onCancel && onCancel();
+                }
+              }}
+              className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors duration-300"
+            >
+              Delete
+            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onCancel}
+                className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                className={`px-4 py-2 text-white rounded-md transition-colors duration-300 ${
+                  formData.isIncome 
+                    ? 'bg-green-600 hover:bg-green-700' 
+                    : 'bg-indigo-600 hover:bg-indigo-700'
+                }`}
+                disabled={categories.length === 0}
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default ExpenseEditModal; 
