@@ -1,12 +1,14 @@
 // IndexedDB database utility for expense tracker
 
 const DB_NAME = 'expense-tracker-db';
-const DB_VERSION = 6; // Incremented for recurring transactions
+const DB_VERSION = 7; // Incremented for budget feature
 const EXPENSES_STORE = 'expenses';
 const CATEGORIES_STORE = 'categories';
 const TAGS_STORE = 'tags';
 const WALLETS_STORE = 'wallets';
 const RECURRING_STORE = 'recurring'; // New store for recurring transactions
+const BUDGET_STORE = 'budgets'; // New store for budgets
+const TRANSFERS_STORE = 'transfers'; // New store for wallet transfers
 
 // Default categories
 const DEFAULT_CATEGORIES = [
@@ -169,6 +171,24 @@ const initDB = () => {
           const recurringStore = db.createObjectStore(RECURRING_STORE, { keyPath: 'id' });
           recurringStore.createIndex('nextDate', 'nextDate', { unique: false });
           recurringStore.createIndex('frequency', 'frequency', { unique: false });
+        }
+      }
+      
+      // Upgrade to version 7 - add budgets and transfers
+      if (oldVersion < 7) {
+        // Create budgets store
+        if (!db.objectStoreNames.contains(BUDGET_STORE)) {
+          const budgetStore = db.createObjectStore(BUDGET_STORE, { keyPath: 'id' });
+          budgetStore.createIndex('category', 'category', { unique: false });
+          budgetStore.createIndex('period', 'period', { unique: false });
+        }
+        
+        // Create transfers store
+        if (!db.objectStoreNames.contains(TRANSFERS_STORE)) {
+          const transfersStore = db.createObjectStore(TRANSFERS_STORE, { keyPath: 'id' });
+          transfersStore.createIndex('date', 'date', { unique: false });
+          transfersStore.createIndex('fromWallet', 'fromWallet', { unique: false });
+          transfersStore.createIndex('toWallet', 'toWallet', { unique: false });
         }
       }
     };
@@ -832,6 +852,296 @@ const recurringDB = {
   }
 };
 
+// Budget operations
+const budgetDB = {
+  // Get all budgets
+  getAll: () => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(BUDGET_STORE, 'readonly');
+        const store = transaction.objectStore(BUDGET_STORE);
+        const getAllRequest = store.getAll();
+        
+        getAllRequest.onsuccess = () => {
+          resolve(getAllRequest.result);
+          db.close();
+        };
+        
+        getAllRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Get budgets by category
+  getByCategory: (category) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(BUDGET_STORE, 'readonly');
+        const store = transaction.objectStore(BUDGET_STORE);
+        const index = store.index('category');
+        const getRequest = index.getAll(category);
+        
+        getRequest.onsuccess = () => {
+          resolve(getRequest.result);
+          db.close();
+        };
+        
+        getRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Add a new budget
+  add: (budget) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(BUDGET_STORE, 'readwrite');
+        const store = transaction.objectStore(BUDGET_STORE);
+        
+        // Ensure ID is present
+        const newBudget = {
+          ...budget,
+          id: budget.id || Date.now()
+        };
+        
+        const addRequest = store.add(newBudget);
+        
+        addRequest.onsuccess = () => {
+          resolve(newBudget);
+          db.close();
+        };
+        
+        addRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Update existing budget
+  update: (budget) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(BUDGET_STORE, 'readwrite');
+        const store = transaction.objectStore(BUDGET_STORE);
+        const updateRequest = store.put(budget);
+        
+        updateRequest.onsuccess = () => {
+          resolve(budget);
+          db.close();
+        };
+        
+        updateRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Delete budget
+  delete: (id) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(BUDGET_STORE, 'readwrite');
+        const store = transaction.objectStore(BUDGET_STORE);
+        const deleteRequest = store.delete(id);
+        
+        deleteRequest.onsuccess = () => {
+          resolve(true);
+          db.close();
+        };
+        
+        deleteRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  }
+};
+
+// Transfer operations
+const transferDB = {
+  // Get all transfers
+  getAll: () => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(TRANSFERS_STORE, 'readonly');
+        const store = transaction.objectStore(TRANSFERS_STORE);
+        const getAllRequest = store.getAll();
+        
+        getAllRequest.onsuccess = () => {
+          resolve(getAllRequest.result);
+          db.close();
+        };
+        
+        getAllRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Add a new transfer
+  add: (transfer) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(TRANSFERS_STORE, 'readwrite');
+        const store = transaction.objectStore(TRANSFERS_STORE);
+        
+        // Ensure ID is present
+        const newTransfer = {
+          ...transfer,
+          id: transfer.id || Date.now(),
+          date: transfer.date || new Date().toISOString().slice(0, 10),
+          photoUrl: transfer.photoUrl || ''
+        };
+        
+        const addRequest = store.add(newTransfer);
+        
+        addRequest.onsuccess = () => {
+          resolve(newTransfer);
+          db.close();
+        };
+        
+        addRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Update existing transfer
+  update: (transfer) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(TRANSFERS_STORE, 'readwrite');
+        const store = transaction.objectStore(TRANSFERS_STORE);
+        
+        // Make sure ID exists
+        if (!transfer.id) {
+          reject(new Error("Transfer ID is required for update"));
+          db.close();
+          return;
+        }
+        
+        // Ensure other fields have defaults
+        const updatedTransfer = {
+          ...transfer,
+          date: transfer.date || new Date().toISOString().slice(0, 10),
+          photoUrl: transfer.photoUrl || ''
+        };
+        
+        const updateRequest = store.put(updatedTransfer);
+        
+        updateRequest.onsuccess = () => {
+          resolve(updatedTransfer);
+          db.close();
+        };
+        
+        updateRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Delete transfer
+  delete: (id) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(TRANSFERS_STORE, 'readwrite');
+        const store = transaction.objectStore(TRANSFERS_STORE);
+        const deleteRequest = store.delete(id);
+        
+        deleteRequest.onsuccess = () => {
+          resolve(true);
+          db.close();
+        };
+        
+        deleteRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  }
+};
+
 // Helper function to migrate data from localStorage to IndexedDB
 const migrateFromLocalStorage = async () => {
   try {
@@ -916,13 +1226,141 @@ const deleteDatabase = () => {
   });
 };
 
+// Reset and recreate database with latest schema
+const resetDatabase = async () => {
+  try {
+    console.log("Starting database reset...");
+    
+    // First, backup data from existing database
+    let expenses = [];
+    let categories = [];
+    let tags = [];
+    let wallets = [];
+    let recurring = [];
+    let budgets = [];
+    let transfers = [];
+    
+    try {
+      // Only backup data if we can access it
+      try { expenses = await expenseDB.getAll(); } catch (e) { console.log("Could not backup expenses"); }
+      try { categories = await categoryDB.getAll(); } catch (e) { console.log("Could not backup categories"); }
+      try { tags = await tagDB.getAll(); } catch (e) { console.log("Could not backup tags"); }
+      try { wallets = await walletDB.getAll(); } catch (e) { console.log("Could not backup wallets"); }
+      try { recurring = await recurringDB.getAll(); } catch (e) { console.log("Could not backup recurring"); }
+      try { budgets = await budgetDB.getAll(); } catch (e) { console.log("Could not backup budgets"); }
+      try { transfers = await transferDB.getAll(); } catch (e) { console.log("Could not backup transfers"); }
+    } catch (backupError) {
+      console.warn("Error backing up data:", backupError);
+      // Continue with reset even if backup fails
+    }
+    
+    // Now delete the database
+    await deleteDatabase();
+    console.log("Database deleted, recreating...");
+    
+    // Recreate database with latest schema
+    const initialized = await initDB();
+    
+    if (!initialized) {
+      throw new Error("Failed to initialize database after reset");
+    }
+    
+    console.log("Database recreated, restoring data...");
+    
+    // Restore data
+    try {
+      // Restore categories first as expenses depend on them
+      for (const category of categories) {
+        try {
+          await categoryDB.add(category).catch(() => {
+            // Category might already exist (from defaults), just ignore
+          });
+        } catch (e) {
+          console.warn("Error restoring category:", category.id);
+        }
+      }
+      
+      // Restore tags
+      for (const tag of tags) {
+        try {
+          await tagDB.add(tag).catch(() => {
+            // Tag might already exist, just ignore
+          });
+        } catch (e) {
+          console.warn("Error restoring tag:", tag.id);
+        }
+      }
+      
+      // Restore wallets
+      for (const wallet of wallets) {
+        try {
+          await walletDB.add(wallet).catch(() => {
+            // Wallet might already exist, just ignore
+          });
+        } catch (e) {
+          console.warn("Error restoring wallet:", wallet.id);
+        }
+      }
+      
+      // Restore expenses
+      for (const expense of expenses) {
+        try {
+          await expenseDB.add(expense);
+        } catch (e) {
+          console.warn("Error restoring expense:", expense.id);
+        }
+      }
+      
+      // Restore recurring
+      for (const rec of recurring) {
+        try {
+          await recurringDB.add(rec);
+        } catch (e) {
+          console.warn("Error restoring recurring:", rec.id);
+        }
+      }
+      
+      // Restore budgets
+      for (const budget of budgets) {
+        try {
+          await budgetDB.add(budget);
+        } catch (e) {
+          console.warn("Error restoring budget:", budget.id);
+        }
+      }
+      
+      // Restore transfers
+      for (const transfer of transfers) {
+        try {
+          await transferDB.add(transfer);
+        } catch (e) {
+          console.warn("Error restoring transfer:", transfer.id);
+        }
+      }
+      
+      console.log("Data restoration complete");
+    } catch (restoreError) {
+      console.error("Error restoring data:", restoreError);
+      // Continue even if some data couldn't be restored
+    }
+    
+    return true;
+  } catch (error) {
+    console.error("Database reset failed:", error);
+    return false;
+  }
+};
+
 // Export the database utilities
 export {
   initializeDatabase,
   deleteDatabase,
+  resetDatabase,
   expenseDB,
   categoryDB,
   tagDB,
   walletDB,
-  recurringDB
+  recurringDB,
+  budgetDB,
+  transferDB
 }; 
