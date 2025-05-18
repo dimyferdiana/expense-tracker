@@ -6,6 +6,8 @@ import ExpenseChart from './components/ExpenseChart';
 import Settings from './components/Settings';
 import RecurringForm from './components/RecurringForm';
 import RecurringList from './components/RecurringList';
+import BudgetManager from './components/BudgetManager';
+import WalletTransfer from './components/WalletTransfer';
 import BottomNavigation from './components/BottomNavigation';
 import FloatingActionButton from './components/FloatingActionButton';
 import Modal from './components/Modal';
@@ -876,7 +878,22 @@ function App() {
       case 'settings':
         return <Settings dbInitialized={dbInitialized} />;
       case 'wallets':
-        return <Wallets dbInitialized={dbInitialized} />;
+        return (
+          <>
+            <Wallets dbInitialized={dbInitialized} />
+            <div className="mt-8">
+              <WalletTransfer 
+                dbInitialized={dbInitialized} 
+                refreshWallets={() => setRefreshWallets(prev => prev + 1)} 
+              />
+            </div>
+          </>
+        );
+      case 'budgets':
+        return <BudgetManager 
+                 dbInitialized={dbInitialized} 
+                 refresh={refreshWallets}
+               />;
       case 'recurring':
         return (
           <>
@@ -1010,6 +1027,12 @@ function App() {
                   </svg>
                   <DropdownLabel>Wallets</DropdownLabel>
                 </DropdownItem>
+                <DropdownItem onClick={() => setActiveTab('budgets')}>
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M5 2a2 2 0 00-2 2v14l3.5-2 3.5 2 3.5-2 3.5 2V4a2 2 0 00-2-2H5zm4.707 3.707a1 1 0 00-1.414-1.414l-3 3a1 1 0 000 1.414l3 3a1 1 0 001.414-1.414L8.414 9H10a3 3 0 013 3v1a1 1 0 102 0v-1a5 5 0 00-5-5H8.414l1.293-1.293z" />
+                  </svg>
+                  <DropdownLabel>Budgets</DropdownLabel>
+                </DropdownItem>
                 <DropdownItem onClick={() => setActiveTab('recurring')}>
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
@@ -1052,6 +1075,12 @@ function App() {
                 current={activeTab === 'wallets'}
               >
                 Wallets
+              </NavbarItem>
+              <NavbarItem 
+                onClick={() => setActiveTab('budgets')} 
+                current={activeTab === 'budgets'}
+              >
+                Budgets
               </NavbarItem>
               <NavbarItem 
                 onClick={() => setActiveTab('recurring')} 
