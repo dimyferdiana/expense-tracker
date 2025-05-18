@@ -73,3 +73,10 @@ yarn build
 ## License
 
 MIT 
+
+<h1>Welcome to Version 2 of My App!</h1>
+- Expense tracker
+- Income tracker
+- Photo attachment
+- Wallet-to-wallet transfer
+- Budgeting
