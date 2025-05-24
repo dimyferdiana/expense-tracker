@@ -1,28 +1,34 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Combobox, ComboboxLabel, ComboboxOption } from './Combobox';
 import TagSelector, { TagSelectorWithLabel } from './TagSelector';
-import { categoryDB, tagDB, walletDB } from '../utils/db';
+import { categoryDB as supabaseCategoryDB, tagDB as supabaseTagDB, walletDB as supabaseWalletDB } from '../utils/supabase-db';
 import DateRangePicker from './DateRangePicker';
 import Badge from './Badge';
 import { getColorName } from '../utils/colors';
+import { useAuth } from '../contexts/AuthContext';
 
 function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized = false }) {
+  const { user } = useAuth();
+  
   const [formData, setFormData] = useState({
     id: expense.id,
-    name: expense.name || '',
+    description: expense.description || '',
     amount: expense.amount || '',
-    category: expense.category || 'food',
+    category: expense.category || 'other',
     tags: expense.tags || [],
-    date: expense.date || new Date().toISOString().slice(0, 10),
-    time: expense.time || new Date().toTimeString().slice(0, 5),
-    walletId: expense.walletId || 'cash',
-    isIncome: expense.isIncome || false,
+    wallet_id: expense.wallet_id || null,
+    is_income: expense.is_income || false,
     notes: expense.notes || '',
-    photoUrl: expense.photoUrl || ''
+    photoUrl: expense.photo_url || '',
+    date: expense.date || new Date().toISOString().slice(0, 10),
+    time: expense.time || new Date().toTimeString().slice(0, 5)
   });
   
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
   const fileInputRef = useRef(null);
-  const [previewUrl, setPreviewUrl] = useState(expense.photoUrl || '');
+  const [previewUrl, setPreviewUrl] = useState(expense.photo_url || '');
   
   // Add state for date picker
   const [activeDatePicker, setActiveDatePicker] = useState(null); // 'date' or null
@@ -50,9 +56,9 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
   useEffect(() => {
     const loadData = async () => {
       try {
-        if (dbInitialized) {
-          // Load categories from IndexedDB
-          const categoryData = await categoryDB.getAll();
+        if (dbInitialized && user) {
+          // Load categories from Supabase
+          const categoryData = await supabaseCategoryDB.getAll(user.id);
           if (categoryData.length > 0) {
             setCategories(categoryData);
             // Set selected category
@@ -60,25 +66,25 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
             if (selectedCat) {
               setSelectedCategory(selectedCat);
             }
-          } else {
-            // Fallback to localStorage if no categories in IndexedDB
-            loadFromLocalStorage();
           }
 
-          // Load tags from IndexedDB
-          const tagData = await tagDB.getAll();
+          // Load tags from Supabase
+          const tagData = await supabaseTagDB.getAll(user.id);
           if (tagData.length > 0) {
             setTags(tagData);
-          } else {
-            // Fallback to localStorage if no tags in IndexedDB
-            loadTagsFromLocalStorage();
           }
 
-          // Load wallets from IndexedDB
-          const walletData = await walletDB.getAll();
+          // Load wallets from Supabase
+          const walletData = await supabaseWalletDB.getAll(user.id);
           if (walletData.length > 0) {
             setWallets(walletData);
-            setFormData(prev => ({ ...prev, walletId: prev.walletId || walletData[0].id }));
+            // Set the wallet_id from the expense if it exists
+            if (expense.wallet_id) {
+              setFormData(prev => ({ ...prev, wallet_id: expense.wallet_id }));
+            } else if (!formData.wallet_id) {
+              // Only set default wallet if no wallet_id exists
+              setFormData(prev => ({ ...prev, wallet_id: walletData[0].id }));
+            }
           }
         } else {
           // Fallback to localStorage
@@ -95,7 +101,7 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
     };
 
     loadData();
-  }, [dbInitialized, expense.category]);
+  }, [dbInitialized, expense.category, expense.wallet_id, user]);
 
   // Load categories from localStorage if needed
   const loadFromLocalStorage = () => {
@@ -108,7 +114,10 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
     if (savedWallets) {
       const parsedWallets = JSON.parse(savedWallets);
       setWallets(parsedWallets);
-      setFormData(prev => ({ ...prev, walletId: prev.walletId || parsedWallets[0].id }));
+      // Only set default wallet if wallet_id is null
+      if (!formData.wallet_id) {
+        setFormData(prev => ({ ...prev, wallet_id: parsedWallets[0].id }));
+      }
     }
   };
 
@@ -141,18 +150,28 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
   };
 
   const handleTagsChange = (selectedTags) => {
+    // Ensure we're only storing tag IDs
+    const tagIds = selectedTags.map(tag => 
+      typeof tag === 'object' && tag !== null ? tag.id : tag
+    );
     setFormData(prev => ({
       ...prev,
-      tags: selectedTags
+      tags: tagIds
     }));
   };
 
-  const handleWalletChange = (e) => {
-    setFormData({ ...formData, walletId: e.target.value.id });
+  const handleWalletChange = (event) => {
+    // Handle both direct wallet object and event object from Combobox
+    const wallet = event?.target ? event.target.value : event;
+    if (!wallet || !wallet.id) {
+      console.error('Invalid wallet selected:', wallet);
+      return;
+    }
+    setFormData(prev => ({ ...prev, wallet_id: wallet.id }));
   };
 
   const handleToggleType = () => {
-    setFormData({ ...formData, isIncome: !formData.isIncome });
+    setFormData({ ...formData, is_income: !formData.is_income });
   };
 
   const handlePhotoChange = (e) => {
@@ -211,8 +230,9 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
     };
 
     try {
-      if (dbInitialized) {
-        await categoryDB.add(newCategory);
+      if (dbInitialized && user) {
+        // Add the category to Supabase
+        await supabaseCategoryDB.add(newCategory, user.id);
       } else {
         // Fallback to localStorage
         const updatedCategories = [...categories, newCategory];
@@ -234,24 +254,48 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
     setShowNewCategoryInput(false);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Simple validation
-    if (!formData.name.trim() || !formData.amount || isNaN(formData.amount)) {
-      alert('Please enter valid details');
+    if (!formData.description?.trim()) {
+      setError('Please enter a description');
       return;
     }
-
-    // Save changes
-    onSave({
-      ...formData,
-      amount: parseFloat(formData.amount),
-      walletId: formData.walletId,
-      isIncome: formData.isIncome,
-      notes: formData.notes,
-      photoUrl: formData.photoUrl
-    });
+    
+    try {
+      setIsSubmitting(true);
+      
+      // Format the data for the database
+      const expenseData = {
+        id: expense.id,
+        amount: parseFloat(formData.amount),
+        description: formData.description.trim(),
+        category: formData.category,
+        date: formData.date,
+        wallet_id: formData.wallet_id,
+        notes: formData.notes?.trim() || '',
+        tags: formData.tags,
+        is_income: Boolean(formData.is_income),
+        photo_url: formData.photoUrl || null
+      };
+      
+      console.log('Submitting expense data:', expenseData);
+      
+      // Call onSave with the formatted data
+      if (typeof onSave === 'function') {
+        await onSave(expenseData);
+      } else {
+        throw new Error('No save function provided');
+      }
+      
+      // Close modal after saving
+      onCancel();
+    } catch (error) {
+      console.error("Error updating expense:", error);
+      alert("There was a problem saving your expense. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Format a date string as a human-readable date
@@ -332,7 +376,7 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
         <div className="sticky top-0 left-0 right-0 px-6 py-4 bg-gray-800 border-b border-gray-700 z-10">
           <div className="flex justify-between items-center">
             <h2 className="text-xl font-semibold text-indigo-300">
-              Edit {formData.isIncome ? 'Income' : 'Expense'}
+              Edit {formData.is_income ? 'Income' : 'Expense'}
             </h2>
             <button
               type="button"
@@ -351,15 +395,15 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
             <div className="flex bg-gray-700 rounded-md p-1">
               <button
                 type="button"
-                className={`flex-1 py-2 px-4 rounded ${!formData.isIncome ? 'bg-indigo-600 text-white' : 'text-gray-300'}`}
-                onClick={() => !formData.isIncome || handleToggleType()}
+                className={`flex-1 py-2 px-4 rounded ${!formData.is_income ? 'bg-indigo-600 text-white' : 'text-gray-300'}`}
+                onClick={() => !formData.is_income || handleToggleType()}
               >
                 Expense
               </button>
               <button
                 type="button"
-                className={`flex-1 py-2 px-4 rounded ${formData.isIncome ? 'bg-green-600 text-white' : 'text-gray-300'}`}
-                onClick={() => formData.isIncome || handleToggleType()}
+                className={`flex-1 py-2 px-4 rounded ${formData.is_income ? 'bg-green-600 text-white' : 'text-gray-300'}`}
+                onClick={() => formData.is_income || handleToggleType()}
               >
                 Income
               </button>
@@ -368,14 +412,14 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
           
           <form onSubmit={handleSubmit}>
             <div className="mb-6">
-              <label htmlFor="name" className="block mb-2 font-medium text-gray-300">
-                {formData.isIncome ? 'Income' : 'Expense'} Name
+              <label htmlFor="description" className="block mb-2 font-medium text-gray-300">
+                {formData.is_income ? 'Income' : 'Expense'} Name
               </label>
               <input
                 type="text"
-                id="name"
-                name="name"
-                value={formData.name}
+                id="description"
+                name="description"
+                value={formData.description}
                 onChange={handleChange}
                 className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 required
@@ -391,8 +435,8 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
                 value={formData.amount}
                 onChange={handleChange}
                 placeholder="0"
-                step="1000"
-                min="1000"
+                min="0"
+                step="any"
                 className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 required
               />
@@ -529,19 +573,20 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
             
             {/* Wallet */}
             <div className="mb-6">
-              <label htmlFor="wallet" className="block mb-2 font-medium text-gray-300">Wallet</label>
+              <ComboboxLabel htmlFor="wallet-select" className="block mb-2 font-medium text-gray-300">Wallet</ComboboxLabel>
               {wallets.length > 0 ? (
                 <Combobox
+                  id="wallet-select"
                   name="wallet"
                   options={wallets}
                   displayValue={(wallet) => wallet?.name}
-                  defaultValue={wallets.find(w => w.id === formData.walletId)}
+                  defaultValue={wallets.find(w => w.id === formData.wallet_id)}
                   onChange={handleWalletChange}
-                  aria-label="Wallet"
+                  aria-label="Select a wallet"
                 >
                   {(wallet) => (
                     <ComboboxOption value={wallet}>
-                      <ComboboxLabel>{wallet.name}</ComboboxLabel>
+                      {wallet.name} {wallet.balance !== undefined ? `($${wallet.balance})` : ''}
                     </ComboboxOption>
                   )}
                 </Combobox>
@@ -610,7 +655,10 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
 
             <div className="mb-6">
               <TagSelectorWithLabel
-                selectedTags={formData.tags}
+                selectedTags={formData.tags.map(tagId => {
+                  const tag = tags.find(t => t.id === tagId);
+                  return tag || tagId;
+                })}
                 availableTags={tags}
                 onChange={handleTagsChange}
                 id="tags"
@@ -705,7 +753,7 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
               <button
                 onClick={handleSubmit}
                 className={`px-4 py-2 text-white rounded-md transition-colors duration-300 ${
-                  formData.isIncome 
+                  formData.is_income 
                     ? 'bg-green-600 hover:bg-green-700' 
                     : 'bg-indigo-600 hover:bg-indigo-700'
                 }`}

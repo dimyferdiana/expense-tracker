@@ -459,7 +459,12 @@ function FilterSortModal({
                   const [field, order] = opt.id.split('_');
                   return sort.field === field && sort.order === order;
                 })}
-                onChange={(option) => handleSortChange(option.id)}
+                onChange={(event) => {
+                  const option = event?.target ? event.target.value : event;
+                  if (option && option.id) {
+                    handleSortChange(option.id);
+                  }
+                }}
                 aria-label="Sort Options"
               />
             </div>

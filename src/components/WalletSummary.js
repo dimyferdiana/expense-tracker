@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { walletDB } from '../utils/db';
+import { walletDB as supabaseWalletDB } from '../utils/supabase-db';
+import { useAuth } from '../contexts/AuthContext';
 
 // Function to format rupiah
 const formatRupiah = (number) => {
@@ -10,18 +11,24 @@ function WalletSummary({ dbInitialized = false, refresh = 0 }) {
   const [wallets, setWallets] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [totalBalance, setTotalBalance] = useState(0);
+  const { user } = useAuth();
 
   useEffect(() => {
     loadWallets();
-  }, [dbInitialized, refresh]);
+  }, [dbInitialized, refresh, user]);
 
   const loadWallets = async () => {
     setIsLoading(true);
     try {
-      // Get wallets from IndexedDB or localStorage
-      const data = dbInitialized
-        ? await walletDB.getAll()
-        : JSON.parse(localStorage.getItem('wallets') || '[]');
+      let data = [];
+      
+      // Get wallets from Supabase if user is authenticated
+      if (dbInitialized && user) {
+        data = await supabaseWalletDB.getAll(user.id);
+      } else {
+        // Fall back to localStorage
+        data = JSON.parse(localStorage.getItem('wallets') || '[]');
+      }
       
       setWallets(data);
       
@@ -103,7 +110,7 @@ function WalletSummary({ dbInitialized = false, refresh = 0 }) {
   }
 
   return (
-    <div className="bg-gray-800 p-6 rounded-lg shadow-lg mb-6">
+    <div className="bg-gray-800 p-6 rounded-lg shadow-lg mb-4 mt-4">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-semibold text-indigo-300">Wallet Balances</h2>
         <div className={`text-xl font-bold ${getBalanceColor(totalBalance)}`}>

@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Combobox, ComboboxLabel, ComboboxOption } from './Combobox';
 import TagSelector, { TagSelectorWithLabel } from './TagSelector';
-import { categoryDB, tagDB, walletDB } from '../utils/db';
+import { categoryDB as supabaseCategoryDB, tagDB as supabaseTagDB, walletDB as supabaseWalletDB } from '../utils/supabase-db';
 import DateRangePicker from './DateRangePicker';
 import Badge from './Badge';
 import { getColorName } from '../utils/colors';
+import { useAuth } from '../contexts/AuthContext';
 
 function CategoryModal({ open, onClose, onSave }) {
   const [input, setInput] = useState('');
@@ -50,7 +51,8 @@ function CategoryModal({ open, onClose, onSave }) {
   );
 }
 
-function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
+function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
+  const { user } = useAuth();
   // Get current date and time for default values
   const now = new Date();
   const currentDate = now.toISOString().slice(0, 10); // YYYY-MM-DD
@@ -61,13 +63,17 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
     amount: '',
     category: 'food',
     tags: [],
-    walletId: 'cash',
-    isIncome: false,
+    walletId: null,
+    wallet_id: null,
+    is_income: false,
     notes: '',
     photoUrl: '',
     date: currentDate,
     time: currentTime
   });
+  
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
   const fileInputRef = useRef(null);
   const [previewUrl, setPreviewUrl] = useState('');
@@ -114,9 +120,9 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
   useEffect(() => {
     const loadData = async () => {
       try {
-        if (dbInitialized) {
-          // Load categories from IndexedDB
-          const categoryData = await categoryDB.getAll();
+        if (dbInitialized && user) {
+          // Load categories from Supabase
+          const categoryData = await supabaseCategoryDB.getAll(user.id);
           if (categoryData.length > 0) {
             setCategories(categoryData);
             
@@ -127,18 +133,28 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
             }
           }
 
-          // Load tags from IndexedDB
-          const tagData = await tagDB.getAll();
+          // Load tags from Supabase
+          const tagData = await supabaseTagDB.getAll(user.id);
           if (tagData.length > 0) {
             setTags(tagData);
           }
 
-          // Load wallets from IndexedDB
-          const walletData = await walletDB.getAll();
+          // Load wallets from Supabase
+          const walletData = await supabaseWalletDB.getAll(user.id);
           if (walletData.length > 0) {
             setWallets(walletData);
             // Set default wallet if not set
-            setFormData(prev => ({ ...prev, walletId: prev.walletId || walletData[0].id }));
+            const defaultWallet = walletData[0];
+            if (defaultWallet) {
+              setFormData(prev => ({ 
+                ...prev, 
+                walletId: defaultWallet.id,
+                wallet_id: defaultWallet.id
+              }));
+            }
+          } else {
+            console.error('No wallets found in database');
+            alert('Please add a wallet before adding transactions');
           }
         } else {
           // Fallback to localStorage
@@ -151,7 +167,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
     };
 
     loadData();
-  }, [dbInitialized]);
+  }, [dbInitialized, user]);
 
   // Load categories from localStorage if needed
   const loadFromLocalStorage = () => {
@@ -179,7 +195,14 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
     if (savedWallets) {
       const parsedWallets = JSON.parse(savedWallets);
       setWallets(parsedWallets);
-      setFormData(prev => ({ ...prev, walletId: prev.walletId || parsedWallets[0].id }));
+      // Only set default wallet if we have wallets
+      if (parsedWallets.length > 0) {
+        setFormData(prev => ({ 
+          ...prev, 
+          walletId: parsedWallets[0].id,
+          wallet_id: parsedWallets[0].id
+        }));
+      }
     }
   };
 
@@ -189,7 +212,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
   };
 
   const handleToggleType = () => {
-    setFormData({ ...formData, isIncome: !formData.isIncome });
+    setFormData({ ...formData, is_income: !formData.is_income });
   };
 
   const handlePhotoChange = (e) => {
@@ -252,8 +275,19 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
     }));
   };
 
-  const handleWalletChange = (e) => {
-    setFormData({ ...formData, walletId: e.target.value.id });
+  const handleWalletChange = (event) => {
+    // Handle both direct wallet object and event object from Combobox
+    const wallet = event?.target ? event.target.value : event;
+    console.log('Selected wallet:', wallet);
+    if (!wallet || !wallet.id) {
+      console.error('Invalid wallet selected:', wallet);
+      setError('Please select a valid wallet');
+      return;
+    }
+    setFormData(prev => ({ 
+      ...prev, 
+      wallet_id: wallet.id // Use only wallet_id consistently
+    }));
   };
 
   const handleAddNewCategoryClick = () => {
@@ -265,155 +299,85 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
   };
 
   const handleSaveCategory = async (name) => {
-    // Generate a random color from the available colors
-    const colors = [
-      'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300',
-      'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
-      'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300',
-      'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-300',
-      'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300',
-      'bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-300',
-      'bg-lime-100 text-lime-800 dark:bg-lime-900 dark:text-lime-300',
-      'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-300',
-      'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-300',
-      'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-300',
-      'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300'
-    ];
-    const randomColor = colors[Math.floor(Math.random() * colors.length)];
-
+    if (!name.trim()) return;
+    
     const newCategory = {
-      id: name.toLowerCase().replace(/\s+/g, '-'),
-      name,
-      color: randomColor
+      id: name.trim().toLowerCase().replace(/\s+/g, '-'), // Simple ID generation
+      name: name.trim(),
     };
+    
     try {
-      if (dbInitialized) {
-        await categoryDB.add(newCategory);
+      if (dbInitialized && user) {
+        // Add the category to Supabase
+        await supabaseCategoryDB.add(newCategory, user.id);
       } else {
         const updatedCategories = [...categories, newCategory];
         setCategories(updatedCategories);
         localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
       }
-      setCategories(prev => [...prev, newCategory]);
-      setFormData(prev => ({ ...prev, category: newCategory.id }));
+      
+      // Select the new category
       setSelectedCategory(newCategory);
+      setFormData(prev => ({ ...prev, category: newCategory.id }));
       setShowCategoryModal(false);
     } catch (error) {
-      alert('Failed to add new category.');
+      console.error('Error adding category:', error);
+      alert('Failed to add category. Please try again.');
     }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Validation
-    if (!formData.name.trim() || !formData.amount || isNaN(formData.amount)) {
-      alert('Please enter valid name and amount');
+    if (!formData.name?.trim()) {
+      setError('Please enter a description');
       return;
     }
 
-    // Determine the final category to use (user could have created a new one)
-    let finalCategory = formData.category;
-    
-    // If a new category name is entered, add it before saving the transaction
-    if (showNewCategoryInput && newCategoryName.trim()) {
-      const newCategory = {
-        id: newCategoryName.trim().toLowerCase().replace(/\s+/g, '-'), // Simple ID generation
-        name: newCategoryName.trim(),
-      };
-
-      try {
-        if (dbInitialized) {
-          await categoryDB.add(newCategory);
-        } else {
-          // Fallback to localStorage
-          const updatedCategories = [...categories, newCategory];
-          setCategories(updatedCategories);
-          localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
-        }
-        // Update the categories state in the form
-        setCategories(prev => [...prev, newCategory]);
-        // Use the new category's id for the current transaction
-        finalCategory = newCategory.id;
-
-        // Reset new category states after saving
-        setNewCategoryName('');
-        setShowNewCategoryInput(false);
-
-      } catch (error) {
-        console.error('Error adding new category on submit:', error);
-        alert('Failed to add new category. Transaction not saved.');
-        return; // Stop submission if new category fails to save
-      }
+    if (!formData.wallet_id) {
+      setError('Please select a wallet');
+      return;
     }
-    
-    // Ensure all tags are saved to the database
-    let processedTags = [...formData.tags]; // Copy the tags array
-    
-    if (dbInitialized) {
-      try {
-        // Check if all tags exist in the database, save any that don't
-        const allTags = await tagDB.getAll();
-        
-        // Process each tag to ensure it's saved to the database
-        for (let i = 0; i < processedTags.length; i++) {
-          const tag = processedTags[i];
-          
-          // If it's an object with a name property, it might be a temporary tag
-          if (typeof tag === 'object' && tag !== null && tag.name) {
-            // Check if this tag already exists in the database
-            const existingTag = allTags.find(t => 
-              t.id === tag.id || 
-              t.name.toLowerCase() === tag.name.toLowerCase()
-            );
-            
-            if (existingTag) {
-              // Use the existing tag instead
-              processedTags[i] = existingTag.id;
-            } else {
-              // Tag doesn't exist, add it to the database
-              try {
-                await tagDB.add(tag);
-                // Replace object reference with just the ID
-                processedTags[i] = tag.id;
-              } catch (tagError) {
-                console.error("Error saving tag:", tagError);
-                // Keep as is if we can't save
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error("Error processing tags:", error);
-        // Proceed with original tags if there's an error
-      }
-    }
-    
-    // Format the expense object
-    const expenseData = {
-      name: formData.name.trim(),
-      amount: parseFloat(formData.amount),
-      category: finalCategory,
-      tags: processedTags, // Use the processed tags
-      walletId: formData.walletId,
-      isIncome: formData.isIncome,
-      notes: formData.notes ? formData.notes.trim() : '',
-      photoUrl: formData.photoUrl,
-      date: formData.date, // Keep original date format for saving
-      time: formData.time  // Keep original time format for saving
-    };
     
     try {
-      addExpense(expenseData);
+      setIsSubmitting(true);
+      
+      // Combine date and time into a single date field
+      const dateTime = formData.time 
+        ? `${formData.date}T${formData.time}:00` 
+        : formData.date;
+      
+      // Format the data for the database
+      const expenseData = {
+        amount: parseFloat(formData.amount),
+        description: formData.name.trim(),
+        category: formData.category,
+        date: dateTime,
+        wallet_id: formData.wallet_id,
+        notes: formData.notes?.trim() || '',
+        tags: formData.tags,
+        is_income: Boolean(formData.is_income),
+        photo_url: formData.photoUrl || null
+      };
+      
+      console.log('Submitting expense data:', expenseData);
+      
+      // Use onSubmit if provided, fall back to addExpense for backward compatibility
+      const submitFunction = onSubmit || addExpense;
+      if (typeof submitFunction === 'function') {
+        await submitFunction(expenseData);
+      } else {
+        throw new Error('No submit function provided');
+      }
       
       // Reset form (except category and wallet for convenience)
       setFormData({
         name: '',
         amount: '',
-        category: finalCategory, // Keep the potentially new category for convenience
+        category: formData.category,
         tags: [],
-        walletId: formData.walletId, // Keep the same wallet for convenience
-        isIncome: false,
+        wallet_id: formData.wallet_id,
+        is_income: false,
         notes: '',
         photoUrl: '',
         date: currentDate,
@@ -423,9 +387,11 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
-    } catch (submitError) {
-      console.error("Error adding expense:", submitError);
-      alert("There was a problem saving your expense. Please try again.");
+    } catch (error) {
+      console.error("Error adding expense:", error);
+      setError(error.message || "There was a problem saving your expense. Please try again.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -478,7 +444,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
       <div className="sticky top-0 left-0 right-0 px-6 py-4 bg-gray-800 border-b border-gray-700 z-10">
         <div className="flex justify-between items-center">
           <h2 className="text-xl font-semibold text-indigo-300">
-            Add New {formData.isIncome ? 'Income' : 'Expense'}
+            Add New {formData.is_income ? 'Income' : 'Expense'}
           </h2>
           <button
             type="button"
@@ -497,25 +463,25 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
           <div className="flex bg-gray-700 rounded-md p-1">
             <button
               type="button"
-              className={`flex-1 py-2 px-4 rounded ${!formData.isIncome ? 'bg-indigo-600 text-white' : 'text-gray-300'}`}
-              onClick={() => !formData.isIncome || handleToggleType()}
+              className={`flex-1 py-2 px-4 rounded ${!formData.is_income ? 'bg-indigo-600 text-white' : 'text-gray-300'}`}
+              onClick={() => !formData.is_income || handleToggleType()}
             >
               Expense
             </button>
             <button
               type="button"
-              className={`flex-1 py-2 px-4 rounded ${formData.isIncome ? 'bg-green-600 text-white' : 'text-gray-300'}`}
-              onClick={() => formData.isIncome || handleToggleType()}
+              className={`flex-1 py-2 px-4 rounded ${formData.is_income ? 'bg-green-600 text-white' : 'text-gray-300'}`}
+              onClick={() => formData.is_income || handleToggleType()}
             >
               Income
             </button>
           </div>
         </div>
         
-        <form onSubmit={handleSubmit}>
+        <form id="expense-form" onSubmit={handleSubmit}>
           <div className="mb-6">
             <label htmlFor="name" className="block mb-2 font-medium text-gray-300">
-              {formData.isIncome ? 'Income' : 'Expense'} Name
+              {formData.is_income ? 'Income' : 'Expense'} Name
             </label>
             <input
               type="text"
@@ -523,7 +489,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
               name="name"
               value={formData.name}
               onChange={handleChange}
-              placeholder={formData.isIncome ? "e.g., Salary" : "e.g., Groceries"}
+              placeholder={formData.is_income ? "e.g., Salary" : "e.g., Groceries"}
               className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               required
               autoFocus
@@ -539,8 +505,8 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
               value={formData.amount}
               onChange={handleChange}
               placeholder="0"
-              step="1000"
-              min="1000"
+              min="0"
+              step="any"
               className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               required
             />
@@ -677,9 +643,10 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
           
           {/* Wallet */}
           <div className="mb-6">
-            <label htmlFor="wallet" className="block mb-2 font-medium text-gray-300">Wallet</label>
+            <label htmlFor="wallet-select" className="block mb-2 font-medium text-gray-300">Wallet</label>
             {wallets.length > 0 ? (
               <Combobox
+                id="wallet-select"
                 name="wallet"
                 options={wallets}
                 displayValue={(wallet) => wallet?.name}
@@ -703,7 +670,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
           {/* Category */}
           <div className="mb-6">
             <div className="flex justify-between items-center mb-2">
-              <label htmlFor="category" className="font-medium text-gray-300">Category</label>
+              <label htmlFor="category-select" className="font-medium text-gray-300">Category</label>
               {!showNewCategoryInput && (
                 <button
                   type="button"
@@ -716,6 +683,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
             </div>
             {showNewCategoryInput ? (
               <input
+                id="category-select"
                 type="text"
                 value={newCategoryName}
                 onChange={handleChange}
@@ -727,6 +695,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
               <div className="space-y-4">
                 <div className="relative mb-4">
                   <input
+                    id="category-select"
                     type="text"
                     value={categorySearchQuery}
                     onChange={handleCategorySearchChange}
@@ -761,7 +730,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
               selectedTags={formData.tags}
               availableTags={tags}
               onChange={handleTagsChange}
-              id="tags"
+              id="tags-select"
               dbInitialized={dbInitialized}
             />
           </div>
@@ -832,15 +801,16 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose }) {
       <div className="sticky bottom-0 left-0 right-0 px-6 py-4 bg-gray-800 border-t border-gray-700 shadow-lg">
         <div className="flex justify-end">
           <button 
-            type="button"
-            onClick={handleSubmit}
+            type="submit"
+            form="expense-form"
             className={`px-6 py-2 text-white rounded-md transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 ${
-              formData.isIncome 
+              formData.is_income 
                 ? 'bg-green-600 hover:bg-green-700 focus:ring-green-500'
                 : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500'
             }`}
+            disabled={isSubmitting}
           >
-            {formData.isIncome ? 'Add Income' : 'Add Expense'}
+            {isSubmitting ? 'Saving...' : formData.is_income ? 'Add Income' : 'Add Expense'}
           </button>
         </div>
       </div>

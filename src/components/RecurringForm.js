@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Combobox, ComboboxLabel, ComboboxOption } from './Combobox';
 import TagSelector, { TagSelectorWithLabel } from './TagSelector';
-import { categoryDB, tagDB, walletDB } from '../utils/db';
+import { categoryDB as supabaseCategoryDB, tagDB as supabaseTagDB, walletDB as supabaseWalletDB } from '../utils/supabase-db';
 import DateRangePicker from './DateRangePicker';
+import { useAuth } from '../contexts/AuthContext';
 
 function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose }) {
+  const { user } = useAuth();
   const [formData, setFormData] = useState({
     name: '',
     amount: '',
@@ -60,9 +62,9 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
   useEffect(() => {
     const loadData = async () => {
       try {
-        if (dbInitialized) {
-          // Load categories from IndexedDB
-          const categoryData = await categoryDB.getAll();
+        if (dbInitialized && user) {
+          // Load categories from Supabase
+          const categoryData = await supabaseCategoryDB.getAll(user.id);
           if (categoryData.length > 0) {
             setCategories(categoryData);
             
@@ -73,14 +75,14 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
             }
           }
 
-          // Load tags from IndexedDB
-          const tagData = await tagDB.getAll();
+          // Load tags from Supabase
+          const tagData = await supabaseTagDB.getAll(user.id);
           if (tagData.length > 0) {
             setTags(tagData);
           }
 
-          // Load wallets from IndexedDB
-          const walletData = await walletDB.getAll();
+          // Load wallets from Supabase
+          const walletData = await supabaseWalletDB.getAll(user.id);
           if (walletData.length > 0) {
             setWallets(walletData);
             // Set default wallet if not set
@@ -97,7 +99,7 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
     };
 
     loadData();
-  }, [dbInitialized]);
+  }, [dbInitialized, user]);
 
   // Load categories from localStorage if needed
   const loadFromLocalStorage = () => {
@@ -138,8 +140,14 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
     setFormData({ ...formData, isIncome: !formData.isIncome });
   };
 
-  const handleCategoryChange = (e) => {
-    setFormData({ ...formData, category: e.target.value.id });
+  const handleCategoryChange = (event) => {
+    // Handle both direct category object and event object from Combobox
+    const category = event?.target ? event.target.value : event;
+    if (!category || !category.id) {
+      console.error('Invalid category selected:', category);
+      return;
+    }
+    setFormData({ ...formData, category: category.id });
   };
 
   const handleTagsChange = (selectedTags) => {
@@ -149,12 +157,24 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
     }));
   };
 
-  const handleWalletChange = (e) => {
-    setFormData({ ...formData, walletId: e.target.value.id });
+  const handleWalletChange = (event) => {
+    // Handle both direct wallet object and event object from Combobox
+    const wallet = event?.target ? event.target.value : event;
+    if (!wallet || !wallet.id) {
+      console.error('Invalid wallet selected:', wallet);
+      return;
+    }
+    setFormData({ ...formData, walletId: wallet.id });
   };
 
-  const handleFrequencyChange = (e) => {
-    setFormData({ ...formData, frequency: e.target.value.id });
+  const handleFrequencyChange = (event) => {
+    // Handle both direct frequency object and event object from Combobox
+    const frequency = event?.target ? event.target.value : event;
+    if (!frequency || !frequency.id) {
+      console.error('Invalid frequency selected:', frequency);
+      return;
+    }
+    setFormData({ ...formData, frequency: frequency.id });
   };
 
   const calculateNextDate = (startDate, frequency) => {
@@ -345,17 +365,18 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
           
           {/* Category */}
           <div className="mb-4">
-            <ComboboxLabel htmlFor="category" className="block text-gray-300 mb-1">Category</ComboboxLabel>
+            <ComboboxLabel htmlFor="category-select" className="block text-gray-300 mb-1">Category</ComboboxLabel>
             <Combobox
-              id="category"
+              id="category-select"
+              name="category"
               value={categories.find(cat => cat.id === formData.category) || categories[0]}
               onChange={handleCategoryChange}
               options={categories}
               displayValue={(option) => option.name}
-              className="w-full bg-gray-700 border border-gray-600 rounded-lg text-white"
+              aria-label="Select a category"
             >
               {(option) => (
-                <ComboboxOption key={option.id} value={option}>
+                <ComboboxOption value={option}>
                   {option.name}
                 </ComboboxOption>
               )}
@@ -368,24 +389,25 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
               selectedTags={formData.tags}
               availableTags={tags}
               onChange={handleTagsChange}
-              id="tags"
+              id="tags-select"
               dbInitialized={dbInitialized}
             />
           </div>
           
           {/* Wallet */}
           <div className="mb-4">
-            <ComboboxLabel htmlFor="wallet" className="block text-gray-300 mb-1">Wallet</ComboboxLabel>
+            <ComboboxLabel htmlFor="wallet-select" className="block text-gray-300 mb-1">Wallet</ComboboxLabel>
             <Combobox
-              id="wallet"
+              id="wallet-select"
+              name="wallet"
               value={wallets.find(w => w.id === formData.walletId) || wallets[0]}
               onChange={handleWalletChange}
               options={wallets}
               displayValue={(option) => option.name}
-              className="w-full bg-gray-700 border border-gray-600 rounded-lg text-white"
+              aria-label="Select a wallet"
             >
               {(option) => (
-                <ComboboxOption key={option.id} value={option}>
+                <ComboboxOption value={option}>
                   {option.name} {option.balance !== undefined ? `($${option.balance})` : ''}
                 </ComboboxOption>
               )}
@@ -394,17 +416,18 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
           
           {/* Frequency */}
           <div className="mb-4">
-            <ComboboxLabel htmlFor="frequency" className="block text-gray-300 mb-1">Frequency</ComboboxLabel>
+            <ComboboxLabel htmlFor="frequency-select" className="block text-gray-300 mb-1">Frequency</ComboboxLabel>
             <Combobox
-              id="frequency"
+              id="frequency-select"
+              name="frequency"
               value={frequencies.find(f => f.id === formData.frequency) || frequencies[3]} // Monthly default
               onChange={handleFrequencyChange}
               options={frequencies}
               displayValue={(option) => option.name}
-              className="w-full bg-gray-700 border border-gray-600 rounded-lg text-white"
+              aria-label="Select a frequency"
             >
               {(option) => (
-                <ComboboxOption key={option.id} value={option}>
+                <ComboboxOption value={option}>
                   {option.name}
                 </ComboboxOption>
               )}

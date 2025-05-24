@@ -1,8 +1,10 @@
 import React, { useState, forwardRef, useImperativeHandle, useEffect } from 'react';
 import Badge from './Badge';
-import { tagDB } from '../utils/db';
+import { tagDB as supabaseTagDB } from '../utils/supabase-db';
+import { useAuth } from '../contexts/AuthContext';
 
-const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChange, dbInitialized = false }, ref) => {
+const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChange, dbInitialized = false, id }, ref) => {
+  const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [isAddTagModalOpen, setIsAddTagModalOpen] = useState(false);
   const [newTagName, setNewTagName] = useState('');
@@ -87,10 +89,10 @@ const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChang
     };
     
     // Save tag to database if possible
-    if (dbInitialized) {
+    if (dbInitialized && user) {
       try {
         // Check if tag already exists
-        const allTags = await tagDB.getAll();
+        const allTags = await supabaseTagDB.getAll(user.id);
         const existingTag = allTags.find(t => t.id === tagId || t.name.toLowerCase() === newTagName.trim().toLowerCase());
         
         if (existingTag) {
@@ -98,10 +100,10 @@ const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChang
           handleTagSelect(existingTag);
         } else {
           // Add new tag to database
-          await tagDB.add(newTag);
+          await supabaseTagDB.add(newTag, user.id);
           
           // Reload tags to make sure our tag was saved
-          const updatedTags = await tagDB.getAll();
+          const updatedTags = await supabaseTagDB.getAll(user.id);
           const savedTag = updatedTags.find(t => t.id === tagId);
           
           if (savedTag) {
@@ -175,11 +177,13 @@ const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChang
       {/* Search Box */}
       <div className="relative mb-4">
         <input
+          id={id}
           type="text"
           className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
           placeholder="Search tags..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
+          aria-label="Search tags"
         />
       </div>
       
@@ -265,6 +269,7 @@ export function TagSelectorWithLabel({ selectedTags, availableTags, onChange, id
         availableTags={availableTags}
         onChange={onChange}
         dbInitialized={dbInitialized}
+        id={id}
       />
     </div>
   );
