@@ -5,10 +5,20 @@ export function Avatar({
   alt = '', 
   initials = '', 
   square = false, 
+  size = 'md',
   className = '',
   ...props 
 }) {
-  const baseClasses = `inline-flex items-center justify-center text-sm font-medium ${square ? 'rounded-md' : 'rounded-full'} overflow-hidden h-8 w-8`;
+  // Size classes mapping
+  const sizeClasses = {
+    'xs': 'h-4 w-4 text-xs',
+    'sm': 'h-6 w-6 text-xs',
+    'md': 'h-8 w-8 text-sm',
+    'lg': 'h-10 w-10 text-base',
+    'xl': 'h-12 w-12 text-lg'
+  };
+  
+  const baseClasses = `inline-flex items-center justify-center font-medium ${square ? 'rounded-md' : 'rounded-full'} overflow-hidden ${sizeClasses[size] || sizeClasses.md}`;
   
   if (src) {
     return (

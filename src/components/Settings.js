@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { categoryDB, tagDB } from '../utils/db';
+import { 
+  categoryDB as supabaseCategoryDB, 
+  tagDB as supabaseTagDB 
+} from '../utils/supabase-db';
 import Badge from './Badge';
 import { colorClasses, getColorClasses, getColorName, availableColors } from '../utils/colors';
+import { useAuth } from '../contexts/AuthContext';
 
 function CategoryModal({ open, onClose, onSave, category = null }) {
   const [name, setName] = useState('');
@@ -28,9 +32,7 @@ function CategoryModal({ open, onClose, onSave, category = null }) {
       return;
     }
     
-    const id = category ? category.id : name.trim().toLowerCase().replace(/\s+/g, '-');
     onSave({ 
-      id, 
       name: name.trim(), 
       color: getColorClasses(color)
     });
@@ -127,8 +129,10 @@ function TagModal({ open, onClose, onSave, tag = null }) {
       return;
     }
     
-    const id = tag ? tag.id : name.trim().toLowerCase().replace(/\s+/g, '-');
-    onSave({ id, name: name.trim(), color });
+    onSave({ 
+      name: name.trim(), 
+      color: color
+    });
     setError('');
   };
 
@@ -198,6 +202,7 @@ function TagModal({ open, onClose, onSave, tag = null }) {
 }
 
 function Settings({ dbInitialized = false }) {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('categories');
   const [categories, setCategories] = useState([]);
   const [tags, setTags] = useState([]);
@@ -211,31 +216,30 @@ function Settings({ dbInitialized = false }) {
   const [editingTag, setEditingTag] = useState(null);
 
   // Load categories and tags
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        if (dbInitialized) {
-          // Load categories from IndexedDB
-          const categoryData = await categoryDB.getAll();
-          setCategories(categoryData);
-          
-          // Load tags from IndexedDB
-          const tagData = await tagDB.getAll();
-          setTags(tagData);
-        } else {
-          // Fallback to localStorage
-          loadFromLocalStorage();
-        }
-      } catch (error) {
-        console.error('Error loading data:', error);
+  const loadData = async () => {
+    try {
+      if (dbInitialized && user) {
+        // Load categories from Supabase
+        const categoryData = await supabaseCategoryDB.getAll(user.id);
+        setCategories(categoryData);
+        // Load tags from Supabase
+        const tagData = await supabaseTagDB.getAll(user.id);
+        setTags(tagData);
+      } else {
+        // Fallback to localStorage
         loadFromLocalStorage();
-      } finally {
-        setIsLoading(false);
       }
-    };
+    } catch (error) {
+      console.error('Error loading data:', error);
+      loadFromLocalStorage();
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
+  useEffect(() => {
     loadData();
-  }, [dbInitialized]);
+  }, [dbInitialized, user]);
 
   // Load from localStorage if needed
   const loadFromLocalStorage = () => {
@@ -290,105 +294,85 @@ function Settings({ dbInitialized = false }) {
     }
   }, [tags, dbInitialized]);
 
-  // Handle category save (add/edit)
-  const handleCategorySave = async (categoryData) => {
+  // Handle saving a category
+  const handleCategorySave = async (category) => {
     try {
       if (editingCategory) {
-        // Update existing category
-        if (dbInitialized) {
-          await categoryDB.update(categoryData);
-          const updatedCategories = await categoryDB.getAll();
-          setCategories(updatedCategories);
-        } else {
-          setCategories(categories.map(cat => 
-            cat.id === editingCategory.id ? categoryData : cat
-          ));
-        }
+        // When editing, make sure to include the id
+        await supabaseCategoryDB.update({
+          ...category,
+          id: editingCategory.id // Include the id from the editingCategory
+        }, user.id);
       } else {
-        // Add new category
-        if (dbInitialized) {
-          await categoryDB.add(categoryData);
-          const updatedCategories = await categoryDB.getAll();
-          setCategories(updatedCategories);
-        } else {
-          setCategories([...categories, categoryData]);
-        }
+        await supabaseCategoryDB.add(category, user.id);
       }
+      await loadData();
       setShowCategoryModal(false);
       setEditingCategory(null);
-      setError('');
     } catch (error) {
       console.error('Error saving category:', error);
-      setError('Failed to save category. Please try again.');
+      alert('Failed to save category. Please try again.');
     }
   };
-
-  // Handle tag save (add/edit)
-  const handleTagSave = async (tagData) => {
+  
+  // Handle saving a tag
+  const handleTagSave = async (tag) => {
     try {
       if (editingTag) {
-        // Update existing tag
-        if (dbInitialized) {
-          await tagDB.update(tagData);
-          const updatedTags = await tagDB.getAll();
-          setTags(updatedTags);
-        } else {
-          setTags(tags.map(tag => 
-            tag.id === editingTag.id ? tagData : tag
-          ));
-        }
+        // When editing, make sure to include the id
+        await supabaseTagDB.update({
+          ...tag,
+          id: editingTag.id // Include the id from the editingTag
+        }, user.id);
       } else {
-        // Add new tag
-        if (dbInitialized) {
-          await tagDB.add(tagData);
-          const updatedTags = await tagDB.getAll();
-          setTags(updatedTags);
-        } else {
-          setTags([...tags, tagData]);
-        }
+        await supabaseTagDB.add(tag, user.id);
       }
+      await loadData();
       setShowTagModal(false);
       setEditingTag(null);
-      setError('');
     } catch (error) {
       console.error('Error saving tag:', error);
-      setError('Failed to save tag. Please try again.');
+      alert('Failed to save tag. Please try again.');
     }
   };
-
-  // Delete category
+  
+  // Handle deleting a category
   const handleDeleteCategory = async (id) => {
-    if (window.confirm('Are you sure you want to delete this category? This may affect existing expenses.')) {
-      try {
-        if (dbInitialized) {
-          await categoryDB.delete(id);
-          const updatedCategories = await categoryDB.getAll();
-          setCategories(updatedCategories);
-        } else {
-          setCategories(categories.filter(cat => cat.id !== id));
-        }
-      } catch (error) {
-        console.error('Error deleting category:', error);
-        alert('Failed to delete category. Please try again.');
+    if (!window.confirm('Are you sure you want to delete this category?')) return;
+    
+    try {
+      if (dbInitialized && user) {
+        await supabaseCategoryDB.delete(id, user.id);
+        const updatedCategories = await supabaseCategoryDB.getAll(user.id);
+        setCategories(updatedCategories);
+      } else {
+        const updatedCategories = categories.filter(c => c.id !== id);
+        setCategories(updatedCategories);
+        localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
       }
+    } catch (error) {
+      console.error('Error deleting category:', error);
+      setError('Failed to delete category. Please try again.');
     }
   };
-
-  // Delete tag
+  
+  // Handle deleting a tag
   const handleDeleteTag = async (id) => {
-    if (window.confirm('Are you sure you want to delete this tag? This will remove it from all expenses.')) {
-      try {
-        if (dbInitialized) {
-          await tagDB.delete(id);
-          const updatedTags = await tagDB.getAll();
-          setTags(updatedTags);
-        } else {
-          setTags(tags.filter(tag => tag.id !== id));
-        }
-      } catch (error) {
-        console.error('Error deleting tag:', error);
-        alert('Failed to delete tag. Please try again.');
+    if (!window.confirm('Are you sure you want to delete this tag?')) return;
+    
+    try {
+      if (dbInitialized && user) {
+        await supabaseTagDB.delete(id, user.id);
+        const updatedTags = await supabaseTagDB.getAll(user.id);
+        setTags(updatedTags);
+      } else {
+        const updatedTags = tags.filter(t => t.id !== id);
+        setTags(updatedTags);
+        localStorage.setItem('expense-tags', JSON.stringify(updatedTags));
       }
+    } catch (error) {
+      console.error('Error deleting tag:', error);
+      setError('Failed to delete tag. Please try again.');
     }
   };
 
@@ -416,7 +400,7 @@ function Settings({ dbInitialized = false }) {
           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" />
           </svg>
-          Storage: {dbInitialized ? 'IndexedDB' : 'LocalStorage'}
+          Storage: {dbInitialized ? 'Supabase' : 'LocalStorage'}
         </span>
       </div>
 

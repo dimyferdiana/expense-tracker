@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import ExpenseEditModal from './ExpenseEditModal';
 import Badge from './Badge';
-import { tagDB, categoryDB } from '../utils/db';
+import { tagDB as supabaseTagDB, categoryDB as supabaseCategoryDB } from '../utils/supabase-db';
 import { getColorName } from '../utils/colors';
+import { useAuth } from '../contexts/AuthContext';
 
 function ExpenseList({ expenses, deleteExpense, updateExpense, dbInitialized = false }) {
   const [selectedExpense, setSelectedExpense] = useState(null);
@@ -17,18 +18,19 @@ function ExpenseList({ expenses, deleteExpense, updateExpense, dbInitialized = f
     { id: 'healthcare', name: 'Healthcare' },
     { id: 'other', name: 'Other' }
   ]);
+  const { user } = useAuth();
 
   // Load all tags and categories
   useEffect(() => {
     const loadData = async () => {
       try {
-        if (dbInitialized) {
-          // Load tags from IndexedDB
-          const tagsData = await tagDB.getAll();
+        if (dbInitialized && user) {
+          // Load tags from Supabase
+          const tagsData = await supabaseTagDB.getAll(user.id);
           setTags(tagsData);
           
-          // Load categories from IndexedDB
-          const categoriesData = await categoryDB.getAll();
+          // Load categories from Supabase
+          const categoriesData = await supabaseCategoryDB.getAll(user.id);
           if (categoriesData.length > 0) {
             setCategories(categoriesData);
           }
@@ -50,7 +52,7 @@ function ExpenseList({ expenses, deleteExpense, updateExpense, dbInitialized = f
     };
     
     loadData();
-  }, [dbInitialized]);
+  }, [dbInitialized, user]);
 
   if (expenses.length === 0) {
     return (
@@ -96,14 +98,7 @@ function ExpenseList({ expenses, deleteExpense, updateExpense, dbInitialized = f
   };
 
   // Format the tag name
-  const formatTagName = (tagIdOrObject) => {
-    // If it's already an object with a name property, return the name
-    if (typeof tagIdOrObject === 'object' && tagIdOrObject !== null && tagIdOrObject.name) {
-      return tagIdOrObject.name;
-    }
-    
-    // Otherwise, look up the tag by ID
-    const tagId = tagIdOrObject;
+  const formatTagName = (tagId) => {
     const tag = tags.find(t => t.id === tagId);
     return tag ? tag.name : tagId;
   };
@@ -122,20 +117,22 @@ function ExpenseList({ expenses, deleteExpense, updateExpense, dbInitialized = f
         {expenses.map((expense) => (
           <div
             key={expense.id}
-            className={`p-4 rounded-lg cursor-pointer transition-transform hover:scale-[1.01] hover:shadow-md ${
-              expense.isIncome ? 'bg-gray-700/80 border-l-4 border-green-500' : 'bg-gray-700/80 border-l-4 border-red-500'
+            className={`p-4 rounded-lg mb-4 ${
+              expense.is_income ? 'bg-gray-700/80 border-l-4 border-green-500' : 'bg-gray-700/80 border-l-4 border-red-500'
             }`}
             onClick={() => handleExpenseClick(expense)}
           >
-            <div className="flex justify-between items-start mb-2">
+            <div className="flex justify-between items-start">
               <div>
-                <div className="font-medium text-white">{expense.name}</div>
-                <div className="text-sm text-gray-400 mt-1">
+                <h3 className="text-lg font-medium text-white mb-1">
+                  {expense.description}
+                </h3>
+                <div className="text-sm text-gray-400">
                   {formatCategory(expense.category)}
                 </div>
               </div>
-              <div className={`font-medium mr-3 ${expense.isIncome ? 'text-green-400' : 'text-red-400'}`}>
-                {expense.isIncome ? '+' : '-'} Rp {formatRupiah(expense.amount)}
+              <div className={`font-medium mr-3 ${expense.is_income ? 'text-green-400' : 'text-red-400'}`}>
+                {expense.is_income ? '+' : '-'} Rp {formatRupiah(expense.amount)}
               </div>
             </div>
             
@@ -163,17 +160,14 @@ function ExpenseList({ expenses, deleteExpense, updateExpense, dbInitialized = f
               <div className="flex flex-wrap gap-1">
                 {expense.tags && expense.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1">
-                    {expense.tags.map((tagIdOrObject) => {
-                      const tagId = typeof tagIdOrObject === 'object' ? tagIdOrObject.id : tagIdOrObject;
-                      return (
-                        <Badge 
-                          key={`${expense.id}-${tagId}`} 
-                          color={getTagColor(tagId)}
-                        >
-                          {formatTagName(tagIdOrObject)}
-                        </Badge>
-                      );
-                    })}
+                    {expense.tags.map((tagId) => (
+                      <Badge 
+                        key={`${expense.id}-${tagId}`} 
+                        color={getTagColor(tagId)}
+                      >
+                        {formatTagName(tagId)}
+                      </Badge>
+                    ))}
                   </div>
                 )}
               </div>

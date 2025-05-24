@@ -1,8 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { budgetDB, categoryDB, expenseDB } from '../utils/db';
+import { 
+  budgetDB as supabaseBudgetDB, 
+  categoryDB as supabaseCategoryDB, 
+  expenseDB as supabaseExpenseDB 
+} from '../utils/supabase-db';
 import Modal from './Modal';
+import { useAuth } from '../contexts/AuthContext';
 
 const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
+  const { user } = useAuth();
   const [budgets, setBudgets] = useState([]);
   const [categories, setCategories] = useState([]);
   const [expensesByCategory, setExpensesByCategory] = useState({});
@@ -32,12 +38,12 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
       
       try {
         // Load categories
-        if (dbInitialized) {
-          const allCategories = await categoryDB.getAll();
+        if (dbInitialized && user) {
+          const allCategories = await supabaseCategoryDB.getAll(user.id);
           setCategories(allCategories);
           
           // Load budgets
-          const allBudgets = await budgetDB.getAll();
+          const allBudgets = await supabaseBudgetDB.getAll(user.id);
           setBudgets(allBudgets);
           
           // Load expenses for the current month
@@ -62,12 +68,12 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
     };
     
     loadData();
-  }, [dbInitialized, currentMonth, refresh]);
+  }, [dbInitialized, currentMonth, refresh, user]);
   
   // Load expenses for the current period (month/week)
   const loadExpensesForCurrentPeriod = async () => {
     try {
-      const allExpenses = await expenseDB.getAll();
+      const allExpenses = await supabaseExpenseDB.getAll(user.id);
       processExpensesForBudget(allExpenses);
     } catch (error) {
       console.error('Error loading expenses for budget:', error);
@@ -86,7 +92,7 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
       return (
         expenseDate.getFullYear() === year &&
         expenseDate.getMonth() === month - 1 &&
-        !expense.isIncome // Only count expenses, not income
+        !expense.is_income // Only count expenses, not income
       );
     });
     
@@ -170,9 +176,9 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
       category: formData.category,
       amount: parseFloat(formData.amount),
       period: formData.period,
-      startDate: formData.startDate,
+      start_date: formData.startDate,      // Use snake_case to match database
       notes: formData.notes,
-      createdAt: new Date().toISOString()
+      created_at: new Date().toISOString() // Use snake_case to match database
     };
     
     try {
@@ -180,8 +186,8 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
         // Update existing budget
         budgetData.id = editingBudget.id;
         
-        if (dbInitialized) {
-          await budgetDB.update(budgetData);
+        if (dbInitialized && user) {
+          await supabaseBudgetDB.update(budgetData, user.id);
         } else {
           // Update in localStorage
           const savedBudgets = JSON.parse(localStorage.getItem('budgets') || '[]');
@@ -193,12 +199,12 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
         }
       } else {
         // Add new budget
-        budgetData.id = Date.now();
-        
-        if (dbInitialized) {
-          await budgetDB.add(budgetData);
+        // Don't set ID manually for database - let it auto-generate
+        if (dbInitialized && user) {
+          await supabaseBudgetDB.add(budgetData, user.id);
         } else {
-          // Add to localStorage
+          // Only set ID for localStorage
+          budgetData.id = Date.now();
           const savedBudgets = JSON.parse(localStorage.getItem('budgets') || '[]');
           savedBudgets.push(budgetData);
           localStorage.setItem('budgets', JSON.stringify(savedBudgets));
@@ -207,8 +213,8 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
       }
       
       // Reload budgets
-      if (dbInitialized) {
-        const allBudgets = await budgetDB.getAll();
+      if (dbInitialized && user) {
+        const allBudgets = await supabaseBudgetDB.getAll(user.id);
         setBudgets(allBudgets);
       }
       
@@ -227,9 +233,9 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
     }
     
     try {
-      if (dbInitialized) {
-        await budgetDB.delete(id);
-        const allBudgets = await budgetDB.getAll();
+      if (dbInitialized && user) {
+        await supabaseBudgetDB.delete(id, user.id);
+        const allBudgets = await supabaseBudgetDB.getAll(user.id);
         setBudgets(allBudgets);
       } else {
         // Delete from localStorage

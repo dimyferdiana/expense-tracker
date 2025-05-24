@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import ExpenseList from '../components/ExpenseList';
 import FilterSortModal from '../components/FilterSortModal';
-import { categoryDB, tagDB, walletDB } from '../utils/db';
+import { 
+  categoryDB as supabaseCategoryDB, 
+  tagDB as supabaseTagDB, 
+  walletDB as supabaseWalletDB 
+} from '../utils/supabase-db';
+import { useAuth } from '../contexts/AuthContext';
 
 function TransactionListPage({
   expenses: allExpenses, // Rename prop to avoid conflict
@@ -9,6 +14,7 @@ function TransactionListPage({
   updateExpense,
   dbInitialized
 }) {
+  const { user } = useAuth();
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [filters, setFilters] = useState({
     type: 'all', // 'all', 'income', 'expense'
@@ -32,12 +38,12 @@ function TransactionListPage({
   useEffect(() => {
     const loadFilterData = async () => {
       try {
-        if (dbInitialized) {
-          const categoriesData = await categoryDB.getAll();
+        if (dbInitialized && user) {
+          const categoriesData = await supabaseCategoryDB.getAll(user.id);
           setAvailableCategories(categoriesData);
-          const tagsData = await tagDB.getAll();
+          const tagsData = await supabaseTagDB.getAll(user.id);
           setAvailableTags(tagsData);
-          const walletsData = await walletDB.getAll();
+          const walletsData = await supabaseWalletDB.getAll(user.id);
           setAvailableWallets(walletsData);
         } else {
            // Fallback to localStorage if IndexedDB fails
@@ -53,7 +59,7 @@ function TransactionListPage({
       }
     };
     loadFilterData();
-  }, [dbInitialized]);
+  }, [dbInitialized, user]);
 
   // Apply filters and sorting whenever expenses, filters, or sort criteria change
   useEffect(() => {
@@ -131,7 +137,7 @@ function TransactionListPage({
 
   return (
     <div className="transaction-list-page">
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex justify-between items-center mb-4 mt-4">
         <h2 className="text-xl font-semibold text-indigo-300">Transaction History</h2>
         <button
           onClick={() => setIsFilterModalOpen(true)}

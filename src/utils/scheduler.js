@@ -1,10 +1,19 @@
-import { recurringDB, expenseDB, walletDB } from './db';
+import { 
+  recurringDB as supabaseRecurringDB, 
+  expenseDB as supabaseExpenseDB, 
+  walletDB as supabaseWalletDB 
+} from './supabase-db';
 
 // Process recurring transactions that are due
-export const processRecurringTransactions = async () => {
+export const processRecurringTransactions = async (userId) => {
+  if (!userId) {
+    console.error('Cannot process recurring transactions without user ID');
+    return { error: 'No user authentication' };
+  }
+  
   try {
     // Get all transactions due today or earlier
-    const dueTransactions = await recurringDB.getDueTransactions();
+    const dueTransactions = await supabaseRecurringDB.getDueTransactions(userId);
     
     if (dueTransactions.length === 0) {
       return { processed: 0 };
@@ -21,28 +30,28 @@ export const processRecurringTransactions = async () => {
         amount: transaction.amount,
         category: transaction.category,
         tags: [...transaction.tags, 'recurring'], // Add the recurring tag
-        walletId: transaction.walletId,
-        isIncome: transaction.isIncome,
+        wallet_id: transaction.walletId,
+        is_income: transaction.isIncome,
         notes: transaction.notes || '',
         date: new Date().toISOString().slice(0, 10), // Today's date
       };
       
       // Add the transaction
-      await expenseDB.add(newTransaction);
+      await supabaseExpenseDB.add(newTransaction, userId);
       
       // Update wallet balance
       try {
-        const wallets = await walletDB.getAll();
-        const wallet = wallets.find(w => w.id === newTransaction.walletId);
+        const wallets = await supabaseWalletDB.getAll(userId);
+        const wallet = wallets.find(w => w.id === newTransaction.wallet_id);
         
         if (wallet) {
           // For income add to balance, for expense subtract
-          const adjustment = newTransaction.isIncome ? 
+          const adjustment = newTransaction.is_income ? 
             parseFloat(newTransaction.amount) : 
             -parseFloat(newTransaction.amount);
             
           wallet.balance = parseFloat(wallet.balance) + adjustment;
-          await walletDB.update(wallet);
+          await supabaseWalletDB.update(wallet, userId);
         }
       } catch (walletError) {
         console.error('Error updating wallet balance:', walletError);
@@ -52,10 +61,10 @@ export const processRecurringTransactions = async () => {
       const nextDate = calculateNextDate(transaction.frequency, new Date());
       
       // Update the recurring transaction with the new next date
-      await recurringDB.update({
+      await supabaseRecurringDB.update({
         ...transaction,
         nextDate: nextDate
-      });
+      }, userId);
       
       processedCount++;
     }

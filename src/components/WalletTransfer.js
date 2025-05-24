@@ -1,17 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { walletDB, transferDB, resetDatabase } from '../utils/db';
+import { walletDB as supabaseWalletDB, transferDB as supabaseTransferDB } from '../utils/supabase-db';
+import { createWalletOperations, WalletUtils } from '../utils/walletOperations';
 import Modal from './Modal';
+import { useAuth } from '../contexts/AuthContext';
 
 const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
   const [wallets, setWallets] = useState([]);
   const [transfers, setTransfers] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [error, setError] = useState('');
   const [editingTransfer, setEditingTransfer] = useState(null);
   const [selectedImage, setSelectedImage] = useState(null);
   const [imagePreview, setImagePreview] = useState('');
   const isMounted = useRef(true);
+  const { user } = useAuth();
   
   // Form state
   const [formData, setFormData] = useState({
@@ -23,10 +27,39 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
     photoUrl: ''
   });
 
-  // Add cleanup when component unmounts
+  // Add cleanup when component unmounts and load localStorage immediately
   useEffect(() => {
     // Set isMounted to true when component mounts (explicitly)
     isMounted.current = true;
+    
+    // Immediately load from localStorage to show content faster
+    const loadLocalStorageImmediately = () => {
+      try {
+        const savedWallets = JSON.parse(localStorage.getItem('wallets') || '[]');
+        const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
+        
+        if (savedWallets.length > 0) {
+          setWallets(savedWallets);
+        } else {
+          setWallets(getDefaultWallets());
+        }
+        
+        if (savedTransfers.length > 0) {
+          setTransfers(savedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
+        }
+        
+        console.log('Loaded initial data from localStorage:', {
+          wallets: savedWallets.length,
+          transfers: savedTransfers.length
+        });
+      } catch (error) {
+        console.error('Error loading initial localStorage data:', error);
+        setWallets(getDefaultWallets());
+        setTransfers([]);
+      }
+    };
+    
+    loadLocalStorageImmediately();
     
     return () => {
       isMounted.current = false;
@@ -39,34 +72,47 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
       if (!isMounted.current) return;
       setIsLoading(true);
       
+      // Set a timeout to force exit loading state after 1 second
+      const loadingTimeout = setTimeout(() => {
+        if (isMounted.current) {
+          console.warn('Loading timeout reached, forcing localStorage fallback');
+          setIsLoading(false);
+          
+          // Load from localStorage as fallback (if not already loaded)
+          const savedWallets = JSON.parse(localStorage.getItem('wallets') || '[]');
+          setWallets(savedWallets.length > 0 ? savedWallets : getDefaultWallets());
+          
+          const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
+          setTransfers(savedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
+        }
+      }, 1000);
+      
       try {
-        if (dbInitialized) {
-          // Load wallets
-          const allWallets = await walletDB.getAll();
+        if (dbInitialized && user?.id) {
+          // Load wallets from Supabase
+          const allWallets = await supabaseWalletDB.getAll(user.id);
           if (isMounted.current) setWallets(allWallets);
           
-          // Load transfer history with error handling
+          // Load transfer history from Supabase
           try {
-            const allTransfers = await transferDB.getAll();
+            const allTransfers = await supabaseTransferDB.getAll(user.id);
             if (isMounted.current) {
               setTransfers(allTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
             }
           } catch (transferError) {
-            console.error('Error loading transfers, may need DB upgrade:', transferError);
+            console.error('Error loading transfers:', transferError);
             if (isMounted.current) setTransfers([]);
             
-            // Check if we need to delete and recreate the database
-            if (transferError.name === 'NotFoundError') {
-              console.warn('Transfers store not found. You may need to upgrade the database.');
-              // Fallback to localStorage
-              const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
-              if (isMounted.current) {
-                setTransfers(savedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
-              }
+            // Fallback to localStorage
+            const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
+            if (isMounted.current) {
+              setTransfers(savedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
             }
           }
         } else {
-          // Fallback to localStorage
+          // Load from localStorage immediately (don't wait for authentication)
+          console.log('Loading from localStorage - dbInitialized:', dbInitialized, 'user:', !!user);
+          
           const savedWallets = JSON.parse(localStorage.getItem('wallets') || '[]');
           if (isMounted.current) {
             setWallets(savedWallets.length > 0 ? savedWallets : getDefaultWallets());
@@ -81,11 +127,17 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
         console.error('Error loading wallet data:', error);
         if (isMounted.current) {
           setError('Failed to load wallets. Please try again.');
-          // Fallback to empty arrays
-          setWallets(getDefaultWallets());
-          setTransfers([]);
+          // Always fallback to localStorage/defaults
+          const savedWallets = JSON.parse(localStorage.getItem('wallets') || '[]');
+          setWallets(savedWallets.length > 0 ? savedWallets : getDefaultWallets());
+          
+          const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
+          setTransfers(savedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
         }
       } finally {
+        // Clear the timeout since we're done loading
+        clearTimeout(loadingTimeout);
+        
         if (isMounted.current) {
           setIsLoading(false);
         }
@@ -93,7 +145,7 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
     };
     
     loadData();
-  }, [dbInitialized]);
+  }, [dbInitialized, user]);
   
   // Add a troubleshooting method to force exit loading state
   const forceExitLoading = () => {
@@ -200,219 +252,72 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
   
   // Handle form submission
   const handleTransfer = async (e) => {
-    if (e && e.preventDefault) {
-      e.preventDefault();
-    }
+    e.preventDefault();
     
-    // Validate form
+    // Basic validation
     if (!formData.fromWallet || !formData.toWallet || !formData.amount) {
-      setError('Please fill in all required fields.');
+      setError('Please fill in all required fields');
       return;
     }
     
     if (formData.fromWallet === formData.toWallet) {
-      setError('Source and destination wallets must be different.');
+      setError('Source and destination wallets cannot be the same');
       return;
     }
     
-    if (parseFloat(formData.amount) <= 0) {
-      setError('Amount must be greater than zero.');
+    const amount = parseFloat(formData.amount);
+    if (amount <= 0) {
+      setError('Amount must be greater than 0');
       return;
     }
-    
-    // Get source and destination wallets
-    const sourceWallet = wallets.find(w => w.id === formData.fromWallet);
-    const destWallet = wallets.find(w => w.id === formData.toWallet);
-    
-    if (!sourceWallet || !destWallet) {
-      setError('Invalid wallet selection.');
-      return;
-    }
-    
-    let photoUrl = formData.photoUrl;
-    
-    // Process image if selected
-    if (selectedImage) {
-      try {
-        // For simplicity we'll just store the data URL directly
-        // In a production app, you might want to upload to a storage service
-        photoUrl = imagePreview;
-      } catch (error) {
-        console.error('Error processing image:', error);
-        setError('Failed to process the image. Please try again.');
-        return;
-      }
-    }
-    
+
+    setIsProcessing(true);
+    setError('');
+
     try {
       if (editingTransfer) {
-        // Editing existing transfer
-        // First, reverse the original transfer effects
-        // (this means we add the original amount back to the original source wallet
-        // and remove it from the original destination wallet)
-        
-        // Calculate the balance adjustments
-        const origSourceWallet = wallets.find(w => w.id === editingTransfer.fromWallet);
-        const origDestWallet = wallets.find(w => w.id === editingTransfer.toWallet);
-        
-        if (origSourceWallet) {
-          // Add back to original source (reverse of the original transfer)
-          origSourceWallet.balance = parseFloat(origSourceWallet.balance) + parseFloat(editingTransfer.amount);
-        }
-        
-        if (origDestWallet) {
-          // Subtract from original destination (reverse of the original transfer)
-          origDestWallet.balance = parseFloat(origDestWallet.balance) - parseFloat(editingTransfer.amount);
-        }
-        
-        // Now apply the new transfer
-        if (sourceWallet) {
-          // Subtract from new source
-          sourceWallet.balance = parseFloat(sourceWallet.balance) - parseFloat(formData.amount);
-        }
-        
-        if (destWallet) {
-          // Add to new destination
-          destWallet.balance = parseFloat(destWallet.balance) + parseFloat(formData.amount);
-        }
-        
-        // Prepare the updated transfer record
-        const updatedTransfer = {
-          id: editingTransfer.id,
+        // Use the new WalletOperations utility for safe transfer update
+        const walletOps = createWalletOperations(user);
+        const result = await walletOps.updateWalletTransfer(editingTransfer.id, {
           fromWallet: formData.fromWallet,
-          fromWalletName: sourceWallet.name,
           toWallet: formData.toWallet,
-          toWalletName: destWallet.name,
-          amount: parseFloat(formData.amount),
+          amount: amount,
           date: formData.date || new Date().toISOString().slice(0, 10),
           notes: formData.notes || '',
-          photoUrl: photoUrl || '',
-          timestamp: new Date().toISOString()
-        };
+          photoUrl: imagePreview || ''
+        });
         
-        if (dbInitialized) {
-          // Update wallets in DB
-          if (origSourceWallet) await walletDB.update(origSourceWallet);
-          if (origDestWallet) await walletDB.update(origDestWallet);
-          if (sourceWallet.id !== origSourceWallet?.id) await walletDB.update(sourceWallet);
-          if (destWallet.id !== origDestWallet?.id) await walletDB.update(destWallet);
-          
-          // Update transfer record
-          await transferDB.update(updatedTransfer);
-          
-          // Check if component is still mounted before updating state
-          if (isMounted.current) {
-            // Fetch updated wallets
-            const updatedWallets = await walletDB.getAll();
-            setWallets(updatedWallets);
-            
-            // Reload transfers
-            const allTransfers = await transferDB.getAll();
-            setTransfers(allTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
-          }
-        } else {
-          // Handle localStorage
-          // Update wallets
-          const updatedWallets = wallets.map(wallet => {
-            if (wallet.id === origSourceWallet?.id) return origSourceWallet;
-            if (wallet.id === origDestWallet?.id) return origDestWallet;
-            if (wallet.id === sourceWallet.id) return sourceWallet;
-            if (wallet.id === destWallet.id) return destWallet;
-            return wallet;
-          });
-          
-          localStorage.setItem('wallets', JSON.stringify(updatedWallets));
+        console.log('Transfer updated successfully:', result);
+        
+        if (isMounted.current) {
+          // Fetch updated wallets and transfers
+          const updatedWallets = await supabaseWalletDB.getAll(user.id);
           setWallets(updatedWallets);
           
-          // Update transfers
-          const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
-          const updatedTransfers = savedTransfers.map(t => 
-            t.id === editingTransfer.id ? updatedTransfer : t
-          );
-          localStorage.setItem('wallet-transfers', JSON.stringify(updatedTransfers));
-          
-          if (isMounted.current) {
-            // Update state
-            setTransfers(updatedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
-          }
+          const allTransfers = await supabaseTransferDB.getAll(user.id);
+          setTransfers(allTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
         }
       } else {
-        // Create transfer record
-        const transferData = {
-          id: Date.now(),
+        // Use the new WalletOperations utility for safe transfer creation
+        const walletOps = createWalletOperations(user);
+        const result = await walletOps.executeWalletTransfer({
           fromWallet: formData.fromWallet,
-          fromWalletName: sourceWallet.name,
           toWallet: formData.toWallet,
-          toWalletName: destWallet.name,
-          amount: parseFloat(formData.amount),
+          amount: amount,
           date: formData.date || new Date().toISOString().slice(0, 10),
           notes: formData.notes || '',
-          photoUrl: photoUrl || '',
-          timestamp: new Date().toISOString()
-        };
+          photoUrl: imagePreview || ''
+        });
         
-        // 1. Update source wallet (subtract amount)
-        const updatedSourceWallet = {
-          ...sourceWallet,
-          balance: parseFloat(sourceWallet.balance) - parseFloat(formData.amount)
-        };
+        console.log('Transfer created successfully:', result);
         
-        // 2. Update destination wallet (add amount)
-        const updatedDestWallet = {
-          ...destWallet,
-          balance: parseFloat(destWallet.balance) + parseFloat(formData.amount)
-        };
-        
-        if (dbInitialized) {
-          // Update wallets in DB
-          await walletDB.update(updatedSourceWallet);
-          await walletDB.update(updatedDestWallet);
-          
-          // Save transfer record - with error handling
-          try {
-            await transferDB.add(transferData);
-            
-            // Check if component is still mounted before updating state
-            if (isMounted.current) {
-              // Fetch updated wallets
-              const updatedWallets = await walletDB.getAll();
-              setWallets(updatedWallets);
-              
-              // Reload transfers
-              const allTransfers = await transferDB.getAll();
-              setTransfers(allTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
-            }
-          } catch (transferError) {
-            console.error('Error with transfers, using localStorage instead:', transferError);
-            // Fallback to localStorage for transfers if the store doesn't exist
-            const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
-            savedTransfers.push(transferData);
-            localStorage.setItem('wallet-transfers', JSON.stringify(savedTransfers));
-            
-            if (isMounted.current) {
-              setTransfers([...savedTransfers].sort((a, b) => new Date(b.date) - new Date(a.date)));
-            }
-          }
-        } else {
-          // Update wallets in localStorage
-          const updatedWallets = wallets.map(wallet => {
-            if (wallet.id === sourceWallet.id) return updatedSourceWallet;
-            if (wallet.id === destWallet.id) return updatedDestWallet;
-            return wallet;
-          });
-          
-          localStorage.setItem('wallets', JSON.stringify(updatedWallets));
+        if (isMounted.current) {
+          // Fetch updated wallets and transfers
+          const updatedWallets = await supabaseWalletDB.getAll(user.id);
           setWallets(updatedWallets);
           
-          // Save transfer record to localStorage
-          const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
-          savedTransfers.push(transferData);
-          localStorage.setItem('wallet-transfers', JSON.stringify(savedTransfers));
-          
-          if (isMounted.current) {
-            // Update state
-            setTransfers([...savedTransfers].sort((a, b) => new Date(b.date) - new Date(a.date)));
-          }
+          const allTransfers = await supabaseTransferDB.getAll(user.id);
+          setTransfers(allTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
         }
       }
       
@@ -439,13 +344,13 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
       }
     } catch (error) {
       console.error('Error processing transfer:', error);
-      if (isMounted.current) {
-        setError('Failed to process the transfer. Please try again.');
-      }
+      setError(error.message || 'Failed to process transfer. Please try again.');
+    } finally {
+      setIsProcessing(false);
     }
   };
   
-  // Handle delete transfer
+  // Handle delete transfer with proper wallet operations
   const handleDeleteTransfer = async (transferId) => {
     if (!window.confirm('Are you sure you want to delete this transfer?')) {
       return;
@@ -462,66 +367,57 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
         return;
       }
       
-      if (dbInitialized) {
-        // First adjust the wallet balances
-        const sourceWallet = wallets.find(w => w.id === transferToDelete.fromWallet);
-        const destWallet = wallets.find(w => w.id === transferToDelete.toWallet);
+      // Get the affected wallets first
+      const sourceWallet = wallets.find(w => w.id === transferToDelete.fromWallet);
+      const destWallet = wallets.find(w => w.id === transferToDelete.toWallet);
+      
+      if (!sourceWallet || !destWallet) {
+        throw new Error('One or both wallets involved in this transfer no longer exist.');
+      }
+
+      if (dbInitialized && user) {
+        // Use the WalletOperations utility for proper transfer deletion
+        const walletOps = createWalletOperations(user);
+        const result = await walletOps.deleteWalletTransfer(transferId);
         
-        if (sourceWallet && destWallet) {
-          // Restore the source wallet balance (add the amount back)
-          const updatedSourceWallet = {
-            ...sourceWallet,
-            balance: parseFloat(sourceWallet.balance) + parseFloat(transferToDelete.amount)
-          };
-          
-          // Reduce the destination wallet balance (subtract the amount)
-          const updatedDestWallet = {
-            ...destWallet,
-            balance: parseFloat(destWallet.balance) - parseFloat(transferToDelete.amount)
-          };
-          
-          // Update the wallets
-          await walletDB.update(updatedSourceWallet);
-          await walletDB.update(updatedDestWallet);
-        }
+        console.log('Transfer deleted via WalletOperations:', result);
         
-        // Now delete the transfer
-        await transferDB.delete(transferId);
-        
-        // Check if component is still mounted before updating state
+        // Refresh data if component is still mounted
         if (isMounted.current) {
-          // Fetch updated wallets
-          const updatedWallets = await walletDB.getAll();
+          const updatedWallets = await supabaseWalletDB.getAll(user.id);
           setWallets(updatedWallets);
           
-          // Reload transfers
-          const allTransfers = await transferDB.getAll();
+          const allTransfers = await supabaseTransferDB.getAll(user.id);
           setTransfers(allTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
         }
       } else {
-        // Handle localStorage
+        // Handle localStorage fallback
         const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
         const updatedTransfers = savedTransfers.filter(t => t.id !== transferId);
         localStorage.setItem('wallet-transfers', JSON.stringify(updatedTransfers));
         
-        // Also update wallet balances in localStorage
+        // Update wallet balances in localStorage
         const savedWallets = JSON.parse(localStorage.getItem('wallets') || '[]');
         const sourceIndex = savedWallets.findIndex(w => w.id === transferToDelete.fromWallet);
         const destIndex = savedWallets.findIndex(w => w.id === transferToDelete.toWallet);
         
         if (sourceIndex !== -1 && destIndex !== -1) {
-          // Add amount back to source wallet
-          savedWallets[sourceIndex].balance = parseFloat(savedWallets[sourceIndex].balance) + parseFloat(transferToDelete.amount);
+          // Reverse the transfer: Add back to source, subtract from destination
+          savedWallets[sourceIndex].balance = WalletUtils.addToBalance(
+            savedWallets[sourceIndex].balance, 
+            transferToDelete.amount
+          );
           
-          // Subtract amount from destination wallet
-          savedWallets[destIndex].balance = parseFloat(savedWallets[destIndex].balance) - parseFloat(transferToDelete.amount);
+          savedWallets[destIndex].balance = WalletUtils.subtractFromBalance(
+            savedWallets[destIndex].balance, 
+            transferToDelete.amount
+          );
           
           localStorage.setItem('wallets', JSON.stringify(savedWallets));
           setWallets(savedWallets);
         }
         
         if (isMounted.current) {
-          // Update UI
           setTransfers(updatedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
         }
       }
@@ -531,7 +427,7 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
         refreshWallets();
       }
       
-      // Close the modal and reset form when deleting from modal
+      // Close modal if we were editing this transfer
       if (isMounted.current && editingTransfer && editingTransfer.id === transferId) {
         setEditingTransfer(null);
         setIsModalOpen(false);
@@ -546,6 +442,9 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
         setSelectedImage(null);
         setImagePreview('');
       }
+
+
+
     } catch (error) {
       console.error('Error deleting transfer:', error);
       if (isMounted.current) {
@@ -560,14 +459,9 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
     return new Date(dateString).toLocaleDateString(undefined, options);
   };
   
-  // Format currency
+  // Format currency display with better precision
   const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('id-ID', {
-      style: 'currency',
-      currency: 'IDR',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    }).format(amount);
+    return WalletUtils.formatBalance(amount);
   };
   
   // Get wallet name by ID
@@ -578,28 +472,14 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
 
   // Update the handleDatabaseReset function
   const handleDatabaseReset = async () => {
-    if (window.confirm('This will reset your database to fix schema issues. Your data will be preserved if possible. Continue?')) {
+    if (window.confirm('This will refresh the page. Continue?')) {
       try {
-        if (isMounted.current) {
-          setError('Resetting database... Please wait.');
-          setIsLoading(true);
-        }
-        
-        const result = await resetDatabase();
-        
-        if (result) {
-          // Force page reload to reinitialize everything
-          window.location.reload();
-        } else if (isMounted.current) {
-          setError('Database reset failed. Please try again or reload the app.');
-          setIsLoading(false);
-        }
+        // Simply reload the page
+        window.location.reload();
       } catch (error) {
-        console.error('Error resetting database:', error);
-        if (isMounted.current) {
-          setError('Failed to reset database. Please try reloading the app.');
-          setIsLoading(false);
-        }
+        console.error('Error resetting:', error);
+        // Ensure we exit loading state even if there's an error
+        setIsLoading(false);
       }
     }
   };

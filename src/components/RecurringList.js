@@ -1,32 +1,43 @@
 import React, { useState, useEffect } from 'react';
 import Badge from './Badge';
-import { categoryDB, tagDB, recurringDB, expenseDB, walletDB } from '../utils/db';
+import { 
+  categoryDB as supabaseCategoryDB, 
+  tagDB as supabaseTagDB, 
+  recurringDB as supabaseRecurringDB, 
+  expenseDB as supabaseExpenseDB, 
+  walletDB as supabaseWalletDB 
+} from '../utils/supabase-db';
+import { createWalletOperations, WalletUtils } from '../utils/walletOperations';
 import { getColorName } from '../utils/colors';
+import { useAuth } from '../contexts/AuthContext';
 
 function RecurringList({ dbInitialized = false, refreshData }) {
   const [recurring, setRecurring] = useState([]);
   const [categories, setCategories] = useState([]);
   const [tags, setTags] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { user } = useAuth();
 
   // Load recurring transactions
   useEffect(() => {
-    loadData();
-  }, [dbInitialized, refreshData]);
+    if (user) {
+      loadData();
+    }
+  }, [dbInitialized, refreshData, user]);
 
   const loadData = async () => {
     setIsLoading(true);
     try {
-      if (dbInitialized) {
-        // Load from IndexedDB
-        const recurringData = await recurringDB.getAll();
+      if (dbInitialized && user) {
+        // Load from Supabase
+        const recurringData = await supabaseRecurringDB.getAll(user.id);
         setRecurring(recurringData);
         
         // Load categories and tags for display
-        const categoryData = await categoryDB.getAll();
+        const categoryData = await supabaseCategoryDB.getAll(user.id);
         setCategories(categoryData);
         
-        const tagData = await tagDB.getAll();
+        const tagData = await supabaseTagDB.getAll(user.id);
         setTags(tagData);
       } else {
         // Fallback to localStorage if needed
@@ -54,69 +65,40 @@ function RecurringList({ dbInitialized = false, refreshData }) {
     }
   };
 
-  // Generate a transaction from a recurring template
-  const generateTransaction = async (recurringItem) => {
+  // Create a transaction from a recurring item
+  const createTransaction = async (recurringItem) => {
     try {
-      // Create transaction
+      // Create the transaction object
       const newTransaction = {
-        id: Date.now(),
-        name: recurringItem.name,
+        description: recurringItem.name,
         amount: recurringItem.amount,
         category: recurringItem.category,
-        tags: [...recurringItem.tags, 'recurring'], // Add recurring tag
-        walletId: recurringItem.walletId,
-        isIncome: recurringItem.isIncome,
-        notes: recurringItem.notes,
-        date: new Date().toISOString().slice(0, 10) // Today's date
+        tags: [...(recurringItem.tags || []), 'recurring'],
+        wallet_id: recurringItem.walletId,
+        is_income: recurringItem.is_income,
+        notes: recurringItem.notes || '',
+        date: recurringItem.nextDate,
+        user_id: user.id
       };
       
-      // Save to database
-      if (dbInitialized) {
-        await expenseDB.add(newTransaction);
-        
-        // Update wallet balance
-        try {
-          const wallets = await walletDB.getAll();
-          const wallet = wallets.find(w => w.id === newTransaction.walletId);
-          
-          if (wallet) {
-            // For income add to balance, for expense subtract
-            const adjustment = newTransaction.isIncome ? 
-              parseFloat(newTransaction.amount) : 
-              -parseFloat(newTransaction.amount);
-              
-            wallet.balance = parseFloat(wallet.balance) + adjustment;
-            await walletDB.update(wallet);
-          }
-        } catch (walletError) {
-          console.error('Error updating wallet balance:', walletError);
-        }
-        
-        // Calculate next occurrence date
-        const nextDate = calculateNextDate(
-          recurringItem.frequency, 
-          new Date().toISOString().slice(0, 10)
-        );
-        
-        // Update recurring item's next date
-        await recurringDB.update({
-          ...recurringItem,
-          nextDate
-        });
-        
-        // Refresh data
-        loadData();
-      }
+      // Use the new WalletOperations utility for safe transaction handling
+      const walletOps = createWalletOperations(user);
+      const result = await walletOps.addExpenseWithWalletUpdate(newTransaction);
+      
+      console.log('Recurring transaction created successfully:', result);
+      
+      return result.expense;
     } catch (error) {
-      console.error('Error generating transaction:', error);
+      console.error('Error creating transaction:', error);
+      throw error;
     }
   };
 
   // Delete a recurring transaction
   const deleteRecurring = async (id) => {
     try {
-      if (dbInitialized) {
-        await recurringDB.delete(id);
+      if (dbInitialized && user) {
+        await supabaseRecurringDB.delete(id, user.id);
       } else {
         // Fallback to localStorage
         const savedRecurring = JSON.parse(localStorage.getItem('recurring-transactions') || '[]');
@@ -132,15 +114,15 @@ function RecurringList({ dbInitialized = false, refreshData }) {
 
   // Process pending recurring transactions
   const processAllDue = async () => {
-    if (!dbInitialized) return;
+    if (!dbInitialized || !user) return;
     
     try {
       // Get all due transactions
-      const dueTransactions = await recurringDB.getDueTransactions();
+      const dueTransactions = await supabaseRecurringDB.getDueTransactions(user.id);
       
       // Process each one
       for (const transaction of dueTransactions) {
-        await generateTransaction(transaction);
+        await createTransaction(transaction);
       }
       
       // Refresh the list
@@ -200,9 +182,9 @@ function RecurringList({ dbInitialized = false, refreshData }) {
     return category ? category.name : categoryId;
   };
 
-  // Format rupiah
+  // Format rupiah with better precision
   const formatRupiah = (number) => {
-    return new Intl.NumberFormat('id-ID').format(number);
+    return WalletUtils.formatBalance(number);
   };
 
   // Get color for tag
@@ -262,7 +244,7 @@ function RecurringList({ dbInitialized = false, refreshData }) {
           <div
             key={item.id}
             className={`p-4 rounded-lg ${
-              item.isIncome ? 'bg-gray-700/80 border-l-4 border-green-500' : 'bg-gray-700/80 border-l-4 border-red-500'
+              item.is_income ? 'bg-gray-700/80 border-l-4 border-green-500' : 'bg-gray-700/80 border-l-4 border-red-500'
             }`}
           >
             <div className="flex justify-between items-start mb-2">
@@ -272,8 +254,8 @@ function RecurringList({ dbInitialized = false, refreshData }) {
                   {formatCategory(item.category)}
                 </div>
               </div>
-              <div className={`font-medium ${item.isIncome ? 'text-green-400' : 'text-red-400'}`}>
-                {item.isIncome ? '+' : '-'} Rp {formatRupiah(item.amount)}
+              <div className={`font-medium ${item.is_income ? 'text-green-400' : 'text-red-400'}`}>
+                {item.is_income ? '+' : '-'} Rp {formatRupiah(item.amount)}
               </div>
             </div>
             
@@ -314,7 +296,7 @@ function RecurringList({ dbInitialized = false, refreshData }) {
               {/* Action buttons */}
               <div className="flex items-center space-x-2">
                 <button
-                  onClick={() => generateTransaction(item)}
+                  onClick={() => createTransaction(item)}
                   className="text-gray-400 hover:text-green-500 transition-colors duration-200"
                   title="Generate Transaction Now"
                 >
