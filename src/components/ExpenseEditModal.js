@@ -225,22 +225,28 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
     if (!newCategoryName.trim()) return;
 
     const newCategory = {
-      id: newCategoryName.trim().toLowerCase().replace(/\s+/g, '-'), // Simple ID generation
       name: newCategoryName.trim(),
     };
 
     try {
       if (dbInitialized && user) {
         // Add the category to Supabase
-        await supabaseCategoryDB.add(newCategory, user.id);
+        const savedCategory = await supabaseCategoryDB.add(newCategory, user.id);
+        // Reload categories to get the updated list with database-generated IDs
+        const updatedCategories = await supabaseCategoryDB.getAll(user.id);
+        setCategories(updatedCategories);
+        setFormData(prev => ({ ...prev, category: savedCategory.id })); // Select the new category
       } else {
-        // Fallback to localStorage
-        const updatedCategories = [...categories, newCategory];
+        // Fallback to localStorage - generate ID for local storage
+        const localCategory = {
+          id: newCategoryName.trim().toLowerCase().replace(/\s+/g, '-'),
+          ...newCategory
+        };
+        const updatedCategories = [...categories, localCategory];
         setCategories(updatedCategories);
         localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
+        setFormData(prev => ({ ...prev, category: localCategory.id })); // Select the new category
       }
-      setCategories(prev => [...prev, newCategory]);
-      setFormData(prev => ({ ...prev, category: newCategory.id })); // Select the new category
       setNewCategoryName('');
       setShowNewCategoryInput(false);
     } catch (error) {

@@ -10,6 +10,15 @@ const SyncStatus = ({ className = '' }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [lastSyncResult, setLastSyncResult] = useState(null);
 
+  // Configuration flag to show/hide individual sync options
+  const SYNC_CONFIG = {
+    showUploadToCloud: false,    // Set to false to hide Upload to Cloud
+    showDownloadFromCloud: false, // Set to false to hide Download from Cloud
+    showFullSync: true,          // Keep Full Sync visible
+    showExportImport: true,      // Keep Export/Import visible
+    showResetDatabase: true      // Keep Reset Database visible
+  };
+
   useEffect(() => {
     if (user) {
       const manager = createSyncManager(user);
@@ -193,86 +202,98 @@ const SyncStatus = ({ className = '' }) => {
             )}
           </div>
           
-          <button
-            onClick={() => handleSync('bidirectional')}
-            disabled={isInProgress || !syncStatus.isOnline}
-            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center disabled:opacity-50"
-          >
-            <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            Full Sync
-            {!syncStatus.isOnline && <span className="ml-auto text-xs">(Offline)</span>}
-          </button>
-
-          <button
-            onClick={() => handleSync('upload')}
-            disabled={isInProgress || !syncStatus.isOnline}
-            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center disabled:opacity-50"
-          >
-            <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-            Upload to Cloud
-            {!syncStatus.isOnline && <span className="ml-auto text-xs">(Offline)</span>}
-          </button>
-
-          <button
-            onClick={() => handleSync('download')}
-            disabled={isInProgress || !syncStatus.isOnline}
-            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center disabled:opacity-50"
-          >
-            <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Download from Cloud
-            {!syncStatus.isOnline && <span className="ml-auto text-xs">(Offline)</span>}
-          </button>
-
-          <div className="border-t border-gray-700 mt-2 pt-2">
+          {SYNC_CONFIG.showFullSync && (
             <button
-              onClick={handleExport}
-              disabled={isInProgress}
+              onClick={() => handleSync('bidirectional')}
+              disabled={isInProgress || !syncStatus.isOnline}
               className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center disabled:opacity-50"
             >
               <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              Export Backup
+              Full Sync
+              {!syncStatus.isOnline && <span className="ml-auto text-xs">(Offline)</span>}
             </button>
+          )}
 
-            <label className="w-full cursor-pointer">
-              <div className="px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center">
-                <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                Import Backup
-              </div>
-              <input
-                type="file"
-                accept=".json"
-                onChange={handleImport}
-                disabled={isInProgress}
-                className="hidden"
-              />
-            </label>
-            
-            <div className="border-t border-gray-700 mt-2 pt-2">
+          {SYNC_CONFIG.showUploadToCloud && (
+            <button
+              onClick={() => handleSync('upload')}
+              disabled={isInProgress || !syncStatus.isOnline}
+              className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center disabled:opacity-50"
+            >
+              <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+              Upload to Cloud
+              {!syncStatus.isOnline && <span className="ml-auto text-xs">(Offline)</span>}
+            </button>
+          )}
+
+          {SYNC_CONFIG.showDownloadFromCloud && (
+            <button
+              onClick={() => handleSync('download')}
+              disabled={isInProgress || !syncStatus.isOnline}
+              className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center disabled:opacity-50"
+            >
+              <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Download from Cloud
+              {!syncStatus.isOnline && <span className="ml-auto text-xs">(Offline)</span>}
+            </button>
+          )}
+
+          <div className="border-t border-gray-700 mt-2 pt-2">
+            {SYNC_CONFIG.showExportImport && (
               <button
-                onClick={() => {
-                  if (window.confirm('Reset local database? This will clear all local data and require a fresh sync. Make sure you have a backup or your data is safely stored in the cloud.')) {
-                    handleDatabaseReset();
-                  }
-                }}
+                onClick={handleExport}
                 disabled={isInProgress}
-                className="w-full text-left px-4 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300 flex items-center disabled:opacity-50"
+                className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center disabled:opacity-50"
               >
                 <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                Reset Database
+                Export Backup
               </button>
-            </div>
+            )}
+
+            {SYNC_CONFIG.showExportImport && (
+              <label className="w-full cursor-pointer">
+                <div className="px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center">
+                  <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                  Import Backup
+                </div>
+                <input
+                  type="file"
+                  accept=".json"
+                  onChange={handleImport}
+                  disabled={isInProgress}
+                  className="hidden"
+                />
+              </label>
+            )}
+            
+            {SYNC_CONFIG.showResetDatabase && (
+              <div className="border-t border-gray-700 mt-2 pt-2">
+                <button
+                  onClick={() => {
+                    if (window.confirm('Reset local database? This will clear all local data and require a fresh sync. Make sure you have a backup or your data is safely stored in the cloud.')) {
+                      handleDatabaseReset();
+                    }
+                  }}
+                  disabled={isInProgress}
+                  className="w-full text-left px-4 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300 flex items-center disabled:opacity-50"
+                >
+                  <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Reset Database
+                </button>
+              </div>
+            )}
           </div>
           
           {syncStatus.errors.length > 0 && (

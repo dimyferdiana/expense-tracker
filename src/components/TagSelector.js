@@ -71,8 +71,20 @@ const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChang
   const handleAddNewTag = async () => {
     if (!newTagName.trim()) return;
     
-    // Generate a proper ID based on the tag name instead of a temporary ID
-    const tagId = newTagName.trim().toLowerCase().replace(/\s+/g, '-');
+    // Generate a proper ID based on the tag name
+    const tagId = newTagName.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    
+    // Check if tag already exists
+    const allTags = [...availableTags, ...temporaryTags];
+    const existingTag = allTags.find(t => t.id === tagId || t.name.toLowerCase() === newTagName.trim().toLowerCase());
+    
+    if (existingTag) {
+      // Use existing tag instead of creating duplicate
+      handleTagSelect(existingTag);
+      setNewTagName('');
+      setIsAddTagModalOpen(false);
+      return;
+    }
     
     // Generate a random color
     const colors = [
@@ -88,56 +100,40 @@ const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChang
       color: randomColor
     };
     
-    // Save tag to database if possible
-    if (dbInitialized && user) {
-      try {
-        // Check if tag already exists
-        const allTags = await supabaseTagDB.getAll(user.id);
-        const existingTag = allTags.find(t => t.id === tagId || t.name.toLowerCase() === newTagName.trim().toLowerCase());
+    try {
+      // Save tag to database if possible
+      if (dbInitialized && user) {
+        // Add new tag to database
+        await supabaseTagDB.add(newTag, user.id);
         
-        if (existingTag) {
-          // Use existing tag instead of creating duplicate
-          handleTagSelect(existingTag);
-        } else {
-          // Add new tag to database
-          await supabaseTagDB.add(newTag, user.id);
-          
-          // Reload tags to make sure our tag was saved
-          const updatedTags = await supabaseTagDB.getAll(user.id);
-          const savedTag = updatedTags.find(t => t.id === tagId);
-          
-          if (savedTag) {
-            // Use the saved tag
-            handleTagSelect(savedTag);
-          } else {
-            // Fall back to the local tag
-            setTemporaryTags(prev => [...prev, newTag]);
-            handleTagSelect(newTag);
-          }
-        }
-      } catch (error) {
-        console.error("Error saving tag to database:", error);
-        // Fall back to temporary tags
+        // The tag should now be available in the availableTags list
+        // We don't need to add it to temporaryTags since it's saved to DB
+        handleTagSelect(newTag);
+      } else {
+        // Add to temporary tags and localStorage
         setTemporaryTags(prev => [...prev, newTag]);
+        
+        // Save to localStorage as fallback
+        try {
+          const savedTags = JSON.parse(localStorage.getItem('expense-tags') || '[]');
+          if (!savedTags.some(t => t.id === tagId || t.name.toLowerCase() === newTagName.trim().toLowerCase())) {
+            savedTags.push(newTag);
+            localStorage.setItem('expense-tags', JSON.stringify(savedTags));
+          }
+        } catch (e) {
+          console.error("Error saving tag to localStorage:", e);
+        }
+        
+        // Add to selected tags
         handleTagSelect(newTag);
       }
-    } else {
-      // Add to temporary tags if not using database
+    } catch (error) {
+      console.error("Error saving tag to database:", error);
+      
+      // Fall back to temporary tags
       setTemporaryTags(prev => [...prev, newTag]);
-      
-      // Add to selected tags
       handleTagSelect(newTag);
-      
-      // Save to localStorage as fallback
-      try {
-        const savedTags = JSON.parse(localStorage.getItem('expense-tags') || '[]');
-        if (!savedTags.some(t => t.id === tagId || t.name.toLowerCase() === newTagName.trim().toLowerCase())) {
-          savedTags.push(newTag);
-          localStorage.setItem('expense-tags', JSON.stringify(savedTags));
-        }
-      } catch (e) {
-        console.error("Error saving tag to localStorage:", e);
-      }
+      alert(`Tag saved locally only: ${error.message}`);
     }
     
     // Reset form

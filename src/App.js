@@ -256,7 +256,7 @@ const AppContent = () => {
       case 'budgets':
         return <BudgetManager dbInitialized={supabaseInitialized} />;
       case 'settings':
-        return <Settings />;
+        return <Settings dbInitialized={supabaseInitialized} />;
       case 'transfer':
         return <WalletTransfer dbInitialized={supabaseInitialized} refreshWallets={refreshWallets} />;
       case 'transactions':
@@ -321,8 +321,10 @@ const AppContent = () => {
         onChange={setActiveTab}
       />
 
-      {/* Floating Action Button */}
-      <FloatingActionButton onClick={() => setIsModalOpen(true)} />
+      {/* Floating Action Button - Hidden on desktop */}
+        <div className="md:hidden">
+          <FloatingActionButton onClick={() => setIsModalOpen(true)} />
+        </div>
 
       {/* Add Expense Modal */}
       <Modal

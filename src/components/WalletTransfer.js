@@ -80,7 +80,14 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
           
           // Load from localStorage as fallback (if not already loaded)
           const savedWallets = JSON.parse(localStorage.getItem('wallets') || '[]');
-          setWallets(savedWallets.length > 0 ? savedWallets : getDefaultWallets());
+          if (savedWallets.length > 0) {
+            setWallets(savedWallets);
+          } else {
+            // Provide default wallets if none exist
+            const defaultWallets = getDefaultWallets();
+            setWallets(defaultWallets);
+            localStorage.setItem('wallets', JSON.stringify(defaultWallets));
+          }
           
           const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
           setTransfers(savedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
@@ -91,7 +98,20 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
         if (dbInitialized && user?.id) {
           // Load wallets from Supabase
           const allWallets = await supabaseWalletDB.getAll(user.id);
-          if (isMounted.current) setWallets(allWallets);
+          if (isMounted.current) {
+            if (allWallets.length > 0) {
+              setWallets(allWallets);
+            } else {
+              // If no wallets in Supabase, check localStorage or create defaults
+              const savedWallets = JSON.parse(localStorage.getItem('wallets') || '[]');
+              if (savedWallets.length > 0) {
+                setWallets(savedWallets);
+              } else {
+                const defaultWallets = getDefaultWallets();
+                setWallets(defaultWallets);
+              }
+            }
+          }
           
           // Load transfer history from Supabase
           try {
@@ -115,7 +135,13 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
           
           const savedWallets = JSON.parse(localStorage.getItem('wallets') || '[]');
           if (isMounted.current) {
-            setWallets(savedWallets.length > 0 ? savedWallets : getDefaultWallets());
+            if (savedWallets.length > 0) {
+              setWallets(savedWallets);
+            } else {
+              const defaultWallets = getDefaultWallets();
+              setWallets(defaultWallets);
+              localStorage.setItem('wallets', JSON.stringify(defaultWallets));
+            }
           }
           
           const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
@@ -126,10 +152,16 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
       } catch (error) {
         console.error('Error loading wallet data:', error);
         if (isMounted.current) {
-          setError('Failed to load wallets. Please try again.');
+          setError('Failed to load wallets. Using default data.');
           // Always fallback to localStorage/defaults
           const savedWallets = JSON.parse(localStorage.getItem('wallets') || '[]');
-          setWallets(savedWallets.length > 0 ? savedWallets : getDefaultWallets());
+          if (savedWallets.length > 0) {
+            setWallets(savedWallets);
+          } else {
+            const defaultWallets = getDefaultWallets();
+            setWallets(defaultWallets);
+            localStorage.setItem('wallets', JSON.stringify(defaultWallets));
+          }
           
           const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
           setTransfers(savedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
@@ -367,14 +399,59 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
         return;
       }
       
-      // Get the affected wallets first
+      // Check if wallets exist, but allow deletion even if they don't
       const sourceWallet = wallets.find(w => w.id === transferToDelete.fromWallet);
       const destWallet = wallets.find(w => w.id === transferToDelete.toWallet);
       
       if (!sourceWallet || !destWallet) {
-        throw new Error('One or both wallets involved in this transfer no longer exist.');
+        console.warn('One or both wallets no longer exist. Proceeding with transfer deletion anyway.');
+        
+        // If wallets don't exist, just delete the transfer record without updating balances
+        if (dbInitialized && user) {
+          // Delete transfer from Supabase
+          await supabaseTransferDB.delete(transferId, user.id);
+          
+          // Refresh transfer list
+          const allTransfers = await supabaseTransferDB.getAll(user.id);
+          if (isMounted.current) {
+            setTransfers(allTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
+          }
+        } else {
+          // Handle localStorage fallback
+          const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
+          const updatedTransfers = savedTransfers.filter(t => t.id !== transferId);
+          localStorage.setItem('wallet-transfers', JSON.stringify(updatedTransfers));
+          
+          if (isMounted.current) {
+            setTransfers(updatedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
+          }
+        }
+        
+        // Close modal if we were editing this transfer
+        if (isMounted.current && editingTransfer && editingTransfer.id === transferId) {
+          setEditingTransfer(null);
+          setIsModalOpen(false);
+          setFormData({
+            fromWallet: '',
+            toWallet: '',
+            amount: '',
+            date: new Date().toISOString().slice(0, 10),
+            notes: '',
+            photoUrl: ''
+          });
+          setSelectedImage(null);
+          setImagePreview('');
+        }
+        
+        // Refresh wallets in parent component
+        if (refreshWallets) {
+          refreshWallets();
+        }
+        
+        return;
       }
 
+      // Both wallets exist, proceed with normal deletion using WalletOperations
       if (dbInitialized && user) {
         // Use the WalletOperations utility for proper transfer deletion
         const walletOps = createWalletOperations(user);
@@ -391,7 +468,7 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
           setTransfers(allTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
         }
       } else {
-        // Handle localStorage fallback
+        // Handle localStorage fallback with balance updates
         const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
         const updatedTransfers = savedTransfers.filter(t => t.id !== transferId);
         localStorage.setItem('wallet-transfers', JSON.stringify(updatedTransfers));
@@ -443,12 +520,25 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
         setImagePreview('');
       }
 
-
-
     } catch (error) {
       console.error('Error deleting transfer:', error);
       if (isMounted.current) {
-        setError('Failed to delete transfer. Please try again.');
+        setError(`Failed to delete transfer: ${error.message}. The transfer record will be removed but wallet balances may need manual adjustment.`);
+        
+        // Even if there's an error, try to remove the transfer from the UI
+        try {
+          if (dbInitialized && user) {
+            const allTransfers = await supabaseTransferDB.getAll(user.id);
+            setTransfers(allTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
+          } else {
+            const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
+            const updatedTransfers = savedTransfers.filter(t => t.id !== transferId);
+            localStorage.setItem('wallet-transfers', JSON.stringify(updatedTransfers));
+            setTransfers(updatedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
+          }
+        } catch (refreshError) {
+          console.error('Error refreshing transfers after failed delete:', refreshError);
+        }
       }
     }
   };
@@ -464,10 +554,37 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
     return WalletUtils.formatBalance(amount);
   };
   
-  // Get wallet name by ID
-  const getWalletName = (walletId) => {
+  // Get wallet name by ID with fallback for missing wallets
+  const getWalletNameSafe = (walletId) => {
     const wallet = wallets.find(w => w.id === walletId);
-    return wallet ? wallet.name : walletId;
+    if (wallet) {
+      return wallet.name;
+    }
+    
+    // If wallet not found, try to get a descriptive name from the ID
+    if (typeof walletId === 'string') {
+      // Convert IDs like 'cash', 'bank', etc. to readable names
+      const idToName = {
+        'cash': 'Cash',
+        'bank': 'Bank Account', 
+        'credit': 'Credit Card',
+        'ewallet': 'E-Wallet',
+        'credit_card': 'Credit Card',
+        'e_wallet': 'E-Wallet',
+        'savings': 'Savings Account'
+      };
+      
+      if (idToName[walletId]) {
+        return `${idToName[walletId]} (Deleted)`;
+      }
+    }
+    
+    return `Wallet ${walletId} (Deleted)`;
+  };
+
+  // Get wallet name by ID (legacy function - keeping for compatibility)
+  const getWalletName = (walletId) => {
+    return getWalletNameSafe(walletId);
   };
 
   // Update the handleDatabaseReset function

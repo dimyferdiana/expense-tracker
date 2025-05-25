@@ -1,5 +1,4 @@
-cd
-ort React from 'react';
+import React from 'react';
 
 function BottomNavigation({ activeTab, onChange }) {
   return (

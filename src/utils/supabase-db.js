@@ -169,13 +169,27 @@ export const categoryDB = {
     if (!userId) throw new Error('User not authenticated');
     
     try {
+      // Check if category with this name already exists (case-insensitive)
+      const { data: existingByName } = await supabase
+        .from('categories')
+        .select('id, name')
+        .eq('user_id', userId)
+        .ilike('name', category.name.trim());
+        
+      if (existingByName && existingByName.length > 0) {
+        throw new Error(`Category with name "${category.name}" already exists`);
+      }
+      
+      const categoryData = {
+        name: category.name.trim(),
+        user_id: userId 
+      };
+      
+      // Don't include custom ID - let database auto-generate UUID
+      
       const { data, error } = await supabase
         .from('categories')
-        .insert([{ 
-          name: category.name,
-          color: category.color || 'blue',
-          user_id: userId 
-        }])
+        .insert([categoryData])
         .select()
         .single();
         
@@ -245,6 +259,58 @@ export const categoryDB = {
       return id;
     } catch (error) {
       console.error('Error deleting category:', error);
+      throw error;
+    }
+  },
+
+  // Clean up duplicate categories (keep the oldest one for each name)
+  cleanupDuplicates: async (userId) => {
+    if (!userId) throw new Error('User not authenticated');
+    
+    try {
+      // Get all categories for the user
+      const { data: allCategories, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: true });
+        
+      if (error) throw error;
+      
+      // Group by name (case-insensitive)
+      const categoryGroups = {};
+      allCategories.forEach(category => {
+        const normalizedName = category.name.toLowerCase().trim();
+        if (!categoryGroups[normalizedName]) {
+          categoryGroups[normalizedName] = [];
+        }
+        categoryGroups[normalizedName].push(category);
+      });
+      
+      // Find duplicates and delete all but the first (oldest) one
+      const duplicatesToDelete = [];
+      Object.values(categoryGroups).forEach(group => {
+        if (group.length > 1) {
+          // Keep the first (oldest), delete the rest
+          duplicatesToDelete.push(...group.slice(1));
+        }
+      });
+      
+      // Delete duplicates
+      for (const duplicate of duplicatesToDelete) {
+        await supabase
+          .from('categories')
+          .delete()
+          .eq('id', duplicate.id)
+          .eq('user_id', userId);
+      }
+      
+      return {
+        duplicatesRemoved: duplicatesToDelete.length,
+        duplicateNames: [...new Set(duplicatesToDelete.map(d => d.name))]
+      };
+    } catch (error) {
+      console.error('Error cleaning up duplicate categories:', error);
       throw error;
     }
   }
@@ -377,13 +443,27 @@ export const tagDB = {
     if (!userId) throw new Error('User not authenticated');
     
     try {
+      // Check if tag with this name already exists (case-insensitive)
+      const { data: existingByName } = await supabase
+        .from('tags')
+        .select('id, name')
+        .eq('user_id', userId)
+        .ilike('name', tag.name.trim());
+        
+      if (existingByName && existingByName.length > 0) {
+        throw new Error(`Tag with name "${tag.name}" already exists`);
+      }
+      
+      const tagData = {
+        name: tag.name.trim(),
+        user_id: userId 
+      };
+      
+      // Don't include custom ID - let database auto-generate UUID
+      
       const { data, error } = await supabase
         .from('tags')
-        .insert([{ 
-          name: tag.name, 
-          color: tag.color || 'blue', // Ensure color is always set
-          user_id: userId 
-        }])
+        .insert([tagData])
         .select()
         .single();
         
@@ -414,8 +494,7 @@ export const tagDB = {
       const { data, error } = await supabase
         .from('tags')
         .update({
-          name: tag.name,
-          color: tag.color
+          name: tag.name
         })
         .eq('id', tag.id)
         .eq('user_id', userId)
@@ -456,6 +535,58 @@ export const tagDB = {
       return id;
     } catch (error) {
       console.error('Error deleting tag:', error);
+      throw error;
+    }
+  },
+
+  // Clean up duplicate tags (keep the oldest one for each name)
+  cleanupDuplicates: async (userId) => {
+    if (!userId) throw new Error('User not authenticated');
+    
+    try {
+      // Get all tags for the user
+      const { data: allTags, error } = await supabase
+        .from('tags')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: true });
+        
+      if (error) throw error;
+      
+      // Group by name (case-insensitive)
+      const tagGroups = {};
+      allTags.forEach(tag => {
+        const normalizedName = tag.name.toLowerCase().trim();
+        if (!tagGroups[normalizedName]) {
+          tagGroups[normalizedName] = [];
+        }
+        tagGroups[normalizedName].push(tag);
+      });
+      
+      // Find duplicates and delete all but the first (oldest) one
+      const duplicatesToDelete = [];
+      Object.values(tagGroups).forEach(group => {
+        if (group.length > 1) {
+          // Keep the first (oldest), delete the rest
+          duplicatesToDelete.push(...group.slice(1));
+        }
+      });
+      
+      // Delete duplicates
+      for (const duplicate of duplicatesToDelete) {
+        await supabase
+          .from('tags')
+          .delete()
+          .eq('id', duplicate.id)
+          .eq('user_id', userId);
+      }
+      
+      return {
+        duplicatesRemoved: duplicatesToDelete.length,
+        duplicateNames: [...new Set(duplicatesToDelete.map(d => d.name))]
+      };
+    } catch (error) {
+      console.error('Error cleaning up duplicate tags:', error);
       throw error;
     }
   }
