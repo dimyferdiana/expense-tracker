@@ -301,28 +301,72 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
   const handleSaveCategory = async (name) => {
     if (!name.trim()) return;
     
+    // Normalize the name for comparison
+    const normalizedName = name.trim().toLowerCase();
+    
+    // Check if category already exists (case-insensitive)
+    const existingCategory = categories.find(c => 
+      c.name.toLowerCase() === normalizedName
+    );
+    
+    if (existingCategory) {
+      // Select the existing category instead
+      setSelectedCategory(existingCategory);
+      setFormData(prev => ({ ...prev, category: existingCategory.id }));
+      setShowCategoryModal(false);
+      return;
+    }
+    
     const newCategory = {
-      id: name.trim().toLowerCase().replace(/\s+/g, '-'), // Simple ID generation
-      name: name.trim(),
+      name: name.trim()
     };
     
     try {
       if (dbInitialized && user) {
         // Add the category to Supabase
-        await supabaseCategoryDB.add(newCategory, user.id);
+        const savedCategory = await supabaseCategoryDB.add(newCategory, user.id);
+        
+        // Reload categories to get the updated list with database-generated IDs
+        const updatedCategories = await supabaseCategoryDB.getAll(user.id);
+        setCategories(updatedCategories);
+        
+        // Select the new category
+        setSelectedCategory(savedCategory);
+        setFormData(prev => ({ ...prev, category: savedCategory.id }));
       } else {
-        const updatedCategories = [...categories, newCategory];
+        // Add to local state and localStorage - generate ID for local storage
+        const localCategory = {
+          id: name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+          ...newCategory
+        };
+        const updatedCategories = [...categories, localCategory];
         setCategories(updatedCategories);
         localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
+        
+        // Select the new category
+        setSelectedCategory(localCategory);
+        setFormData(prev => ({ ...prev, category: localCategory.id }));
       }
-      
-      // Select the new category
-      setSelectedCategory(newCategory);
-      setFormData(prev => ({ ...prev, category: newCategory.id }));
       setShowCategoryModal(false);
     } catch (error) {
       console.error('Error adding category:', error);
-      alert('Failed to add category. Please try again.');
+      if (error.message.includes('already exists')) {
+        // If it's a duplicate error, reload categories and select the existing one
+        if (dbInitialized && user) {
+          const updatedCategories = await supabaseCategoryDB.getAll(user.id);
+          setCategories(updatedCategories);
+          const existingCat = updatedCategories.find(c => 
+            c.name.toLowerCase() === normalizedName
+          );
+          if (existingCat) {
+            setSelectedCategory(existingCat);
+            setFormData(prev => ({ ...prev, category: existingCat.id }));
+          }
+        }
+        setShowCategoryModal(false);
+      } else {
+        alert(`Failed to add category: ${error.message}`);
+      }
     }
   };
 

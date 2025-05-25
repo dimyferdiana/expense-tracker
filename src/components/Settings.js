@@ -295,44 +295,134 @@ function Settings({ dbInitialized = false }) {
   }, [tags, dbInitialized]);
 
   // Handle saving a category
-  const handleCategorySave = async (category) => {
+  const handleCategorySave = async (categoryData) => {
     try {
       if (editingCategory) {
-        // When editing, make sure to include the id
-        await supabaseCategoryDB.update({
-          ...category,
-          id: editingCategory.id // Include the id from the editingCategory
-        }, user.id);
+        // Editing existing category
+        const updatedCategory = {
+          ...editingCategory,
+          name: categoryData.name,
+        };
+        
+        // Only include color for localStorage
+        const localCategory = {
+          ...updatedCategory,
+          color: categoryData.color
+        };
+        
+        if (dbInitialized && user) {
+          await supabaseCategoryDB.update(updatedCategory, user.id);
+        } else {
+          // Update in local state and localStorage
+          const updatedCategories = categories.map(c => 
+            c.id === editingCategory.id ? localCategory : c
+          );
+          setCategories(updatedCategories);
+          localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
+        }
       } else {
-        await supabaseCategoryDB.add(category, user.id);
+        // Adding new category
+        const newCategory = {
+          name: categoryData.name,
+        };
+        
+        // Only include color for localStorage
+        const localCategory = {
+          id: categoryData.name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+          ...newCategory,
+          color: categoryData.color
+        };
+        
+        // Check if category with this ID already exists
+        const existingCategory = categories.find(c => c.id === localCategory.id);
+        if (existingCategory) {
+          alert('A category with this name already exists!');
+          return;
+        }
+        
+        if (dbInitialized && user) {
+          await supabaseCategoryDB.add(newCategory, user.id);
+        } else {
+          // Add to local state and localStorage
+          const updatedCategories = [...categories, localCategory];
+          setCategories(updatedCategories);
+          localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
+        }
       }
+      
+      // Reload data to ensure we have the latest
       await loadData();
       setShowCategoryModal(false);
       setEditingCategory(null);
     } catch (error) {
       console.error('Error saving category:', error);
-      alert('Failed to save category. Please try again.');
+      alert(`Failed to save category: ${error.message}`);
     }
   };
   
   // Handle saving a tag
-  const handleTagSave = async (tag) => {
+  const handleTagSave = async (tagData) => {
     try {
       if (editingTag) {
-        // When editing, make sure to include the id
-        await supabaseTagDB.update({
-          ...tag,
-          id: editingTag.id // Include the id from the editingTag
-        }, user.id);
+        // Editing existing tag
+        const updatedTag = {
+          ...editingTag,
+          name: tagData.name,
+        };
+        
+        // Only include color for localStorage
+        const localTag = {
+          ...updatedTag,
+          color: tagData.color
+        };
+        
+        if (dbInitialized && user) {
+          await supabaseTagDB.update(updatedTag, user.id);
+        } else {
+          // Update in local state and localStorage
+          const updatedTags = tags.map(t => 
+            t.id === editingTag.id ? localTag : t
+          );
+          setTags(updatedTags);
+          localStorage.setItem('expense-tags', JSON.stringify(updatedTags));
+        }
       } else {
-        await supabaseTagDB.add(tag, user.id);
+        // Adding new tag
+        const newTag = {
+          name: tagData.name,
+        };
+        
+        // Only include color for localStorage
+        const localTag = {
+          id: tagData.name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+          ...newTag,
+          color: tagData.color
+        };
+        
+        // Check if tag with this ID already exists
+        const existingTag = tags.find(t => t.id === localTag.id);
+        if (existingTag) {
+          alert('A tag with this name already exists!');
+          return;
+        }
+        
+        if (dbInitialized && user) {
+          await supabaseTagDB.add(newTag, user.id);
+        } else {
+          // Add to local state and localStorage
+          const updatedTags = [...tags, localTag];
+          setTags(updatedTags);
+          localStorage.setItem('expense-tags', JSON.stringify(updatedTags));
+        }
       }
+      
+      // Reload data to ensure we have the latest
       await loadData();
       setShowTagModal(false);
       setEditingTag(null);
     } catch (error) {
       console.error('Error saving tag:', error);
-      alert('Failed to save tag. Please try again.');
+      alert(`Failed to save tag: ${error.message}`);
     }
   };
   
@@ -376,6 +466,43 @@ function Settings({ dbInitialized = false }) {
     }
   };
 
+  // Handle cleanup duplicates
+  const handleCleanupDuplicates = async () => {
+    if (!dbInitialized || !user) {
+      alert('Cleanup is only available when using the cloud database.');
+      return;
+    }
+    
+    if (!window.confirm('This will remove duplicate categories and tags (keeping the oldest version of each). Continue?')) {
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      
+      // Cleanup categories
+      const categoryResult = await supabaseCategoryDB.cleanupDuplicates(user.id);
+      
+      // Cleanup tags  
+      const tagResult = await supabaseTagDB.cleanupDuplicates(user.id);
+      
+      // Reload data
+      await loadData();
+      
+      const totalRemoved = categoryResult.duplicatesRemoved + tagResult.duplicatesRemoved;
+      if (totalRemoved > 0) {
+        alert(`Cleanup completed! Removed ${totalRemoved} duplicates:\n- Categories: ${categoryResult.duplicatesRemoved}\n- Tags: ${tagResult.duplicatesRemoved}`);
+      } else {
+        alert('No duplicates found!');
+      }
+    } catch (error) {
+      console.error('Error cleaning up duplicates:', error);
+      alert(`Failed to cleanup duplicates: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center py-12">
@@ -402,6 +529,15 @@ function Settings({ dbInitialized = false }) {
           </svg>
           Storage: {dbInitialized ? 'Supabase' : 'LocalStorage'}
         </span>
+        {dbInitialized && user && (
+          <button
+            onClick={handleCleanupDuplicates}
+            className="ml-4 text-xs px-3 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded-md transition-colors"
+            disabled={isLoading}
+          >
+            🧹 Cleanup Duplicates
+          </button>
+        )}
       </div>
 
       {/* Tab Navigation */}
