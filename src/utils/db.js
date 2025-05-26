@@ -298,6 +298,34 @@ const expenseDB = {
     });
   },
   
+  // Get a single expense by ID
+  getById: (id) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(EXPENSES_STORE, 'readonly');
+        const store = transaction.objectStore(EXPENSES_STORE);
+        const getRequest = store.get(id);
+
+        getRequest.onsuccess = () => {
+          resolve(getRequest.result);
+          db.close();
+        };
+
+        getRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
   // Add a new expense
   add: (expense) => {
     return new Promise((resolve, reject) => {

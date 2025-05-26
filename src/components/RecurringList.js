@@ -10,6 +10,7 @@ import {
 import { createWalletOperations, WalletUtils } from '../utils/walletOperations';
 import { getColorName } from '../utils/colors';
 import { useAuth } from '../contexts/AuthContext';
+import { safeSetItem } from '../utils/safeStorage';
 
 function RecurringList({ dbInitialized = false, refreshData }) {
   const [recurring, setRecurring] = useState([]);
@@ -103,7 +104,7 @@ function RecurringList({ dbInitialized = false, refreshData }) {
         // Fallback to localStorage
         const savedRecurring = JSON.parse(localStorage.getItem('recurring-transactions') || '[]');
         const updatedRecurring = savedRecurring.filter(item => item.id !== id);
-        localStorage.setItem('recurring-transactions', JSON.stringify(updatedRecurring));
+        safeSetItem('recurring-transactions', JSON.stringify(updatedRecurring));
       }
       // Refresh the list
       loadData();

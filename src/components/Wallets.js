@@ -5,6 +5,7 @@ import { Combobox, ComboboxLabel, ComboboxOption } from './Combobox';
 import Modal from './Modal';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../hooks/useNotification';
+import { safeSetItem } from '../utils/safeStorage';
 
 const WALLET_TYPES = [
   { id: 'cash', name: 'Cash' },
@@ -140,17 +141,17 @@ function Wallets({ dbInitialized = false, refresh = 0 }) {
   const addLocal = (wallet) => {
     const data = JSON.parse(localStorage.getItem('wallets') || '[]');
     data.push(wallet);
-    localStorage.setItem('wallets', JSON.stringify(data));
+    safeSetItem('wallets', JSON.stringify(data));
   };
   const updateLocal = (wallet) => {
     let data = JSON.parse(localStorage.getItem('wallets') || '[]');
     data = data.map(w => w.id === wallet.id ? wallet : w);
-    localStorage.setItem('wallets', JSON.stringify(data));
+    safeSetItem('wallets', JSON.stringify(data));
   };
   const deleteLocal = (id) => {
     let data = JSON.parse(localStorage.getItem('wallets') || '[]');
     data = data.filter(w => w.id !== id);
-    localStorage.setItem('wallets', JSON.stringify(data));
+    safeSetItem('wallets', JSON.stringify(data));
   };
 
   // Function to handle database reset

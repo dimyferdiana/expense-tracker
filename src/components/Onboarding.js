@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 const Onboarding = ({ onComplete, onSkip }) => {
@@ -87,13 +87,13 @@ const Onboarding = ({ onComplete, onSkip }) => {
     navigate('/signup');
   };
 
-  const handleSkip = () => {
-    if (onSkip) {
-      onSkip();
-    } else {
-      navigate('/signup');
-    }
-  };
+  const handleSkip = useCallback(() => {
+    // Always navigate to signup, regardless of onSkip prop
+    navigate('/signup');
+    
+    // Optional: Still call onSkip if provided (for side effects)
+    onSkip?.(); 
+  }, [navigate, onSkip]);
 
   const currentPageData = pages[currentPage];
 

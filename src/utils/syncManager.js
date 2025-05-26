@@ -8,6 +8,8 @@ import {
   tagDB as localTagDB,
   recurringDB as localRecurringDB
 } from './db';
+import { dataIntegrityManager, preSyncValidation } from './dataIntegrity';
+import { safeSetItem } from './safeStorage';
 
 import {
   expenseDB as supabaseExpenseDB,
@@ -20,7 +22,8 @@ import {
 } from './supabase-db';
 
 /**
- * Comprehensive sync manager for local-first expense tracker
+ * Simplified sync manager for expense tracker (Week 1-2 state)
+ * Direct sync without operation queue to avoid localStorage quota issues
  */
 export class SyncManager {
   constructor(user) {
@@ -31,7 +34,11 @@ export class SyncManager {
       conflicts: [],
       errors: [],
       hasLocalChanges: this.hasLocalChanges(),
-      isOnline: navigator.onLine
+      isOnline: navigator.onLine,
+      backgroundSyncEnabled: true,
+      adaptiveInterval: 5 * 60 * 1000, // Start with 5 minutes
+      consecutiveFailures: 0,
+      lastSuccessfulSync: null
     };
 
     // Listen for online/offline events
@@ -40,6 +47,9 @@ export class SyncManager {
     
     // Initialize local database if needed
     this.initializeLocalDatabase();
+
+    // Set up adaptive background sync
+    this.setupAdaptiveBackgroundSync();
   }
 
   /**
@@ -64,7 +74,26 @@ export class SyncManager {
   }
 
   handleOnlineStatusChange() {
+    const wasOnline = this.syncStatus.isOnline;
     this.syncStatus.isOnline = navigator.onLine;
+    
+    if (!wasOnline && navigator.onLine) {
+      // Just came online - re-enable background sync
+      console.log('Device came online - resuming background sync');
+      this.syncStatus.backgroundSyncEnabled = true;
+      this.syncStatus.consecutiveFailures = 0;
+      
+      // Restart background sync
+      this.setupAdaptiveBackgroundSync();
+    } else if (wasOnline && !navigator.onLine) {
+      // Just went offline
+      console.log('Device went offline - pausing background sync');
+      if (this.backgroundSyncInterval) {
+        clearTimeout(this.backgroundSyncInterval);
+        this.backgroundSyncInterval = null;
+      }
+    }
+    
     this.saveStatusToLocalStorage();
   }
 
@@ -78,7 +107,7 @@ export class SyncManager {
 
   markLocalChange() {
     this.syncStatus.hasLocalChanges = true;
-    localStorage.setItem('hasLocalChanges', 'true');
+    safeSetItem('hasLocalChanges', 'true');
     this.saveStatusToLocalStorage();
   }
 
@@ -89,16 +118,22 @@ export class SyncManager {
   }
 
   saveStatusToLocalStorage() {
-    localStorage.setItem('syncStatus', JSON.stringify(this.syncStatus));
+    safeSetItem('syncStatus', JSON.stringify(this.syncStatus));
     if (this.syncStatus.lastSync) {
-      localStorage.setItem('lastSyncTime', this.syncStatus.lastSync);
+      safeSetItem('lastSyncTime', this.syncStatus.lastSync);
     }
   }
 
   /**
-   * Main sync function - handles bidirectional, upload, or download
+   * Enhanced main sync function with data integrity validation
    */
-  async fullSync(direction = 'bidirectional') {
+  async fullSync(direction = 'bidirectional', options = {}) {
+    const {
+      skipValidation = false,
+      autoFixIntegrity = true,
+      performMaintenance = false
+    } = options;
+
     if (this.syncStatus.inProgress) {
       throw new Error('Sync already in progress');
     }
@@ -125,24 +160,90 @@ export class SyncManager {
     this.saveStatusToLocalStorage();
 
     try {
-      let result = { success: true, conflicts: [], stats: {} };
+      let result = { success: true, conflicts: [], stats: {}, validation: null, maintenance: null };
 
+      // Pre-sync validation and integrity checks
+      if (!skipValidation) {
+        console.log('Performing pre-sync validation...');
+        try {
+          const validationResult = await preSyncValidation();
+          result.validation = validationResult;
+
+          // Auto-fix integrity issues if enabled
+          if (autoFixIntegrity && validationResult.integrity.issues.length > 0) {
+            console.log(`Found ${validationResult.integrity.issues.length} integrity issues, attempting auto-fix...`);
+            const fixResult = await dataIntegrityManager.autoFixIntegrityIssues(validationResult.integrity.issues);
+            result.validation.autoFix = fixResult;
+            
+            if (fixResult.successful > 0) {
+              console.log(`Auto-fixed ${fixResult.successful} integrity issues`);
+              // Re-validate after fixes
+              result.validation.postFix = await preSyncValidation();
+            }
+          }
+
+          // Check if validation passed
+          if (!validationResult.overallValid && !autoFixIntegrity) {
+            const criticalIssues = validationResult.integrity.issues.filter(i => i.severity === 'critical');
+            if (criticalIssues.length > 0) {
+              throw new Error(`Critical data integrity issues found: ${criticalIssues.length} issues. Sync aborted.`);
+            }
+          }
+        } catch (validationError) {
+          console.error('Pre-sync validation failed:', validationError);
+          this.syncStatus.errors.push({
+            message: `Pre-sync validation failed: ${validationError.message}`,
+            timestamp: new Date().toISOString(),
+            type: 'validation'
+          });
+          // Continue with sync but log the validation failure
+        }
+      }
+
+      // Perform maintenance if requested
+      if (performMaintenance) {
+        console.log('Performing database maintenance...');
+        try {
+          result.maintenance = await dataIntegrityManager.performMaintenance({
+            cleanupTombstonesOlderThan: 30,
+            validateData: true,
+            autoFix: autoFixIntegrity
+          });
+        } catch (maintenanceError) {
+          console.error('Database maintenance failed:', maintenanceError);
+          this.syncStatus.errors.push({
+            message: `Database maintenance failed: ${maintenanceError.message}`,
+            timestamp: new Date().toISOString(),
+            type: 'maintenance'
+          });
+          // Continue with sync even if maintenance fails
+        }
+      }
+
+      // Perform the actual sync
       switch (direction) {
         case 'upload':
-          result = await this.uploadToCloud();
+          result = { ...result, ...(await this.uploadToCloud()) };
           break;
         case 'download':
-          result = await this.downloadFromCloud();
+          result = { ...result, ...(await this.downloadFromCloud()) };
           break;
         case 'bidirectional':
         default:
-          result = await this.bidirectionalSync();
+          result = { ...result, ...(await this.bidirectionalSync()) };
           break;
       }
 
       this.syncStatus.lastSync = new Date().toISOString();
+      this.syncStatus.lastSuccessfulSync = new Date().toISOString();
+      this.syncStatus.consecutiveFailures = 0;
       this.clearLocalChanges();
-      console.log(`${direction} sync completed successfully:`, result.stats);
+      
+      console.log(`Enhanced ${direction} sync completed successfully:`, {
+        stats: result.stats,
+        validation: result.validation ? 'completed' : 'skipped',
+        maintenance: result.maintenance ? 'completed' : 'skipped'
+      });
       
       return result;
     } catch (error) {
@@ -151,6 +252,7 @@ export class SyncManager {
         timestamp: new Date().toISOString(),
         type: direction
       });
+      this.syncStatus.consecutiveFailures++;
       throw error;
     } finally {
       this.syncStatus.inProgress = false;
@@ -199,25 +301,25 @@ export class SyncManager {
       categories: { uploaded: 0, errors: 0 },
       wallets: { uploaded: 0, errors: 0 },
       transfers: { uploaded: 0, errors: 0 },
-      tags: { uploaded: 0, errors: 0 },
       budgets: { uploaded: 0, errors: 0 },
+      tags: { uploaded: 0, errors: 0 },
       recurring: { uploaded: 0, errors: 0 }
     };
 
-    // Upload in dependency order: categories, tags, wallets first, then transactions
-    await this.uploadDataType('categories', localCategoryDB, supabaseCategoryDB, stats);
-    await this.uploadDataType('tags', localTagDB, supabaseTagDB, stats);
-    await this.uploadDataType('wallets', localWalletDB, supabaseWalletDB, stats);
-    await this.uploadDataType('budgets', localBudgetDB, supabaseBudgetDB, stats);
-    await this.uploadDataType('recurring', localRecurringDB, supabaseRecurringDB, stats);
-    await this.uploadDataType('transfers', localTransferDB, supabaseTransferDB, stats);
+    // Upload each data type
     await this.uploadDataType('expenses', localExpenseDB, supabaseExpenseDB, stats);
+    await this.uploadDataType('categories', localCategoryDB, supabaseCategoryDB, stats);
+    await this.uploadDataType('wallets', localWalletDB, supabaseWalletDB, stats);
+    await this.uploadDataType('transfers', localTransferDB, supabaseTransferDB, stats);
+    await this.uploadDataType('budgets', localBudgetDB, supabaseBudgetDB, stats);
+    await this.uploadDataType('tags', localTagDB, supabaseTagDB, stats);
+    await this.uploadDataType('recurring', localRecurringDB, supabaseRecurringDB, stats);
 
-    return { success: true, conflicts: [], stats };
+    return { stats, conflicts: this.syncStatus.conflicts };
   }
 
   /**
-   * Download all data from Supabase to local storage
+   * Download all data from Supabase to local
    */
   async downloadFromCloud() {
     const stats = {
@@ -225,21 +327,21 @@ export class SyncManager {
       categories: { downloaded: 0, errors: 0 },
       wallets: { downloaded: 0, errors: 0 },
       transfers: { downloaded: 0, errors: 0 },
-      tags: { downloaded: 0, errors: 0 },
       budgets: { downloaded: 0, errors: 0 },
+      tags: { downloaded: 0, errors: 0 },
       recurring: { downloaded: 0, errors: 0 }
     };
 
-    // Download in dependency order
-    await this.downloadDataType('categories', supabaseCategoryDB, localCategoryDB, stats);
-    await this.downloadDataType('tags', supabaseTagDB, localTagDB, stats);
-    await this.downloadDataType('wallets', supabaseWalletDB, localWalletDB, stats);
-    await this.downloadDataType('budgets', supabaseBudgetDB, localBudgetDB, stats);
-    await this.downloadDataType('recurring', supabaseRecurringDB, localRecurringDB, stats);
-    await this.downloadDataType('transfers', supabaseTransferDB, localTransferDB, stats);
+    // Download each data type
     await this.downloadDataType('expenses', supabaseExpenseDB, localExpenseDB, stats);
+    await this.downloadDataType('categories', supabaseCategoryDB, localCategoryDB, stats);
+    await this.downloadDataType('wallets', supabaseWalletDB, localWalletDB, stats);
+    await this.downloadDataType('transfers', supabaseTransferDB, localTransferDB, stats);
+    await this.downloadDataType('budgets', supabaseBudgetDB, localBudgetDB, stats);
+    await this.downloadDataType('tags', supabaseTagDB, localTagDB, stats);
+    await this.downloadDataType('recurring', supabaseRecurringDB, localRecurringDB, stats);
 
-    return { success: true, conflicts: [], stats };
+    return { stats, conflicts: this.syncStatus.conflicts };
   }
 
   /**
@@ -247,51 +349,25 @@ export class SyncManager {
    */
   async bidirectionalSync() {
     const stats = {
-      expenses: { uploaded: 0, downloaded: 0, conflicts: 0 },
-      categories: { uploaded: 0, downloaded: 0, conflicts: 0 },
-      wallets: { uploaded: 0, downloaded: 0, conflicts: 0 },
-      transfers: { uploaded: 0, downloaded: 0, conflicts: 0 },
-      tags: { uploaded: 0, downloaded: 0, conflicts: 0 },
-      budgets: { uploaded: 0, downloaded: 0, conflicts: 0 },
-      recurring: { uploaded: 0, downloaded: 0, conflicts: 0 }
+      expenses: { uploaded: 0, downloaded: 0, conflicts: 0, errors: 0 },
+      categories: { uploaded: 0, downloaded: 0, conflicts: 0, errors: 0 },
+      wallets: { uploaded: 0, downloaded: 0, conflicts: 0, errors: 0 },
+      transfers: { uploaded: 0, downloaded: 0, conflicts: 0, errors: 0 },
+      budgets: { uploaded: 0, downloaded: 0, conflicts: 0, errors: 0 },
+      tags: { uploaded: 0, downloaded: 0, conflicts: 0, errors: 0 },
+      recurring: { uploaded: 0, downloaded: 0, conflicts: 0, errors: 0 }
     };
 
-    const conflicts = [];
+    // Sync each data type bidirectionally
+    await this.syncDataTypeBidirectional('expenses', localExpenseDB, supabaseExpenseDB, stats);
+    await this.syncDataTypeBidirectional('categories', localCategoryDB, supabaseCategoryDB, stats);
+    await this.syncDataTypeBidirectional('wallets', localWalletDB, supabaseWalletDB, stats);
+    await this.syncDataTypeBidirectional('transfers', localTransferDB, supabaseTransferDB, stats);
+    await this.syncDataTypeBidirectional('budgets', localBudgetDB, supabaseBudgetDB, stats);
+    await this.syncDataTypeBidirectional('tags', localTagDB, supabaseTagDB, stats);
+    await this.syncDataTypeBidirectional('recurring', localRecurringDB, supabaseRecurringDB, stats);
 
-    // Sync each data type with conflict resolution
-    const dataTypes = [
-      { name: 'categories', local: localCategoryDB, remote: supabaseCategoryDB },
-      { name: 'tags', local: localTagDB, remote: supabaseTagDB },
-      { name: 'wallets', local: localWalletDB, remote: supabaseWalletDB },
-      { name: 'budgets', local: localBudgetDB, remote: supabaseBudgetDB },
-      { name: 'recurring', local: localRecurringDB, remote: supabaseRecurringDB },
-      { name: 'transfers', local: localTransferDB, remote: supabaseTransferDB },
-      { name: 'expenses', local: localExpenseDB, remote: supabaseExpenseDB }
-    ];
-
-    for (const dataType of dataTypes) {
-      try {
-        const result = await this.syncDataTypeBidirectional(
-          dataType.name,
-          dataType.local,
-          dataType.remote,
-          stats[dataType.name]
-        );
-        if (result.conflicts.length > 0) {
-          conflicts.push(...result.conflicts);
-          stats[dataType.name].conflicts = result.conflicts.length;
-        }
-      } catch (error) {
-        console.error(`Error syncing ${dataType.name}:`, error);
-        this.syncStatus.errors.push({
-          message: `${dataType.name}: ${error.message}`,
-          timestamp: new Date().toISOString(),
-          type: 'bidirectional'
-        });
-      }
-    }
-
-    return { success: true, conflicts, stats };
+    return { stats, conflicts: this.syncStatus.conflicts };
   }
 
   /**
@@ -858,6 +934,136 @@ export class SyncManager {
       console.error('Error clearing data type:', error);
     }
   }
+
+  /**
+   * Setup adaptive background sync with intelligent intervals
+   */
+  setupAdaptiveBackgroundSync() {
+    if (this.backgroundSyncInterval) {
+      clearTimeout(this.backgroundSyncInterval);
+    }
+
+    const performBackgroundSync = async () => {
+      if (!this.syncStatus.backgroundSyncEnabled || !navigator.onLine || this.syncStatus.inProgress) {
+        return;
+      }
+
+      try {
+        console.log('Performing background sync...');
+        await this.fullSync('bidirectional', { skipValidation: true });
+        
+        // Successful sync - reset failure count and maintain current interval
+        this.syncStatus.consecutiveFailures = 0;
+        this.syncStatus.lastSuccessfulSync = new Date().toISOString();
+        
+        console.log('Background sync completed successfully');
+      } catch (error) {
+        console.warn('Background sync failed:', error);
+        this.syncStatus.consecutiveFailures++;
+        
+        // Exponential backoff: double the interval after each failure, max 30 minutes
+        const maxInterval = 30 * 60 * 1000; // 30 minutes
+        this.syncStatus.adaptiveInterval = Math.min(
+          this.syncStatus.adaptiveInterval * 2,
+          maxInterval
+        );
+        
+        // After 5 consecutive failures, disable background sync temporarily
+        if (this.syncStatus.consecutiveFailures >= 5) {
+          console.warn('Too many sync failures, temporarily disabling background sync');
+          this.syncStatus.backgroundSyncEnabled = false;
+          this.saveStatusToLocalStorage();
+          return;
+        }
+      }
+
+      // Schedule next sync
+      if (this.syncStatus.backgroundSyncEnabled && navigator.onLine) {
+        this.backgroundSyncInterval = setTimeout(
+          performBackgroundSync,
+          this.syncStatus.adaptiveInterval
+        );
+      }
+    };
+
+    // Start background sync
+    if (this.syncStatus.backgroundSyncEnabled && navigator.onLine) {
+      this.backgroundSyncInterval = setTimeout(
+        performBackgroundSync,
+        this.syncStatus.adaptiveInterval
+      );
+    }
+  }
+
+  /**
+   * Enable/disable background sync
+   */
+  setBackgroundSyncEnabled(enabled) {
+    this.syncStatus.backgroundSyncEnabled = enabled;
+    
+    if (enabled && navigator.onLine) {
+      this.setupAdaptiveBackgroundSync();
+    } else if (!enabled && this.backgroundSyncInterval) {
+      clearTimeout(this.backgroundSyncInterval);
+      this.backgroundSyncInterval = null;
+    }
+    
+    this.saveStatusToLocalStorage();
+  }
+
+  /**
+   * Force immediate sync (resets adaptive interval)
+   */
+  async forceSync(direction = 'bidirectional') {
+    // Reset adaptive interval to be more aggressive after manual sync
+    this.syncStatus.adaptiveInterval = 2 * 60 * 1000; // 2 minutes
+    this.syncStatus.consecutiveFailures = 0;
+    this.syncStatus.backgroundSyncEnabled = true;
+    
+    const result = await this.fullSync(direction);
+    
+    // Restart background sync with new interval
+    this.setupAdaptiveBackgroundSync();
+    
+    return result;
+  }
+
+  /**
+   * Get comprehensive sync statistics
+   */
+  async getSyncStatistics() {
+    try {
+      const stats = {
+        lastSync: this.syncStatus.lastSync,
+        lastSuccessfulSync: this.syncStatus.lastSuccessfulSync,
+        consecutiveFailures: this.syncStatus.consecutiveFailures,
+        hasLocalChanges: this.syncStatus.hasLocalChanges,
+        isOnline: this.syncStatus.isOnline,
+        backgroundSyncEnabled: this.syncStatus.backgroundSyncEnabled,
+        adaptiveInterval: this.syncStatus.adaptiveInterval,
+        errors: this.syncStatus.errors.slice(-10), // Last 10 errors
+        conflicts: this.syncStatus.conflicts.slice(-10) // Last 10 conflicts
+      };
+
+      return stats;
+    } catch (error) {
+      console.error('Error getting sync statistics:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Cleanup resources
+   */
+  cleanup() {
+    if (this.backgroundSyncInterval) {
+      clearTimeout(this.backgroundSyncInterval);
+      this.backgroundSyncInterval = null;
+    }
+    
+    window.removeEventListener('online', this.handleOnlineStatusChange.bind(this));
+    window.removeEventListener('offline', this.handleOnlineStatusChange.bind(this));
+  }
 }
 
 export const createSyncManager = (user) => {
@@ -923,7 +1129,7 @@ export const markLocalChange = () => {
     globalSyncManager.markLocalChange();
   } else {
     // Fallback for when sync manager isn't initialized
-    localStorage.setItem('hasLocalChanges', 'true');
+    safeSetItem('hasLocalChanges', 'true');
   }
 };
 

@@ -121,18 +121,29 @@ export class WalletOperations {
   /**
    * Add expense/income with atomic wallet update
    */
-  async addExpenseWithWalletUpdate(expense) {
+  async addExpenseWithWalletUpdate(expense, options = {}) {
     if (!this.user?.id) {
       throw new Error('User not authenticated');
     }
 
     // Validate wallet exists and has sufficient balance for expenses
+    // Skip validation if explicitly disabled (for emergency data entry)
     const isExpense = !expense.is_income;
-    await this.validateWalletBalance(
-      expense.wallet_id, 
-      expense.amount, 
-      isExpense
-    );
+    if (!options.skipBalanceValidation) {
+      await this.validateWalletBalance(
+        expense.wallet_id, 
+        expense.amount, 
+        isExpense
+      );
+    } else {
+      console.warn('⚠️ Balance validation skipped for expense:', expense.id);
+      // Still validate wallet exists
+      const wallets = await supabaseWalletDB.getAll(this.user.id);
+      const wallet = wallets.find(w => w.id === expense.wallet_id);
+      if (!wallet) {
+        throw new Error(`Wallet with ID ${expense.wallet_id} not found`);
+      }
+    }
 
     // Start transaction-like operation
     const rollbackOperations = [];
@@ -676,6 +687,132 @@ export class WalletOperations {
       
       throw error;
     }
+  }
+
+  /**
+   * Manually correct wallet balance (for data recovery/correction)
+   * Use this when wallet balance becomes corrupted or needs manual adjustment
+   */
+  async correctWalletBalance(walletId, newBalance, reason = 'Manual correction') {
+    if (!this.user?.id) {
+      throw new Error('User not authenticated');
+    }
+
+    const wallets = await supabaseWalletDB.getAll(this.user.id);
+    const wallet = wallets.find(w => w.id === walletId);
+    
+    if (!wallet) {
+      throw new Error(`Wallet with ID ${walletId} not found`);
+    }
+
+    const oldBalance = wallet.balance;
+    const correctedBalance = new Decimal(newBalance).toNumber();
+    
+    console.log(`🔧 Correcting wallet balance:`, {
+      walletId: wallet.id,
+      walletName: wallet.name,
+      oldBalance: new Decimal(oldBalance).toFixed(2),
+      newBalance: new Decimal(correctedBalance).toFixed(2),
+      adjustment: new Decimal(correctedBalance).minus(oldBalance).toFixed(2),
+      reason
+    });
+
+    const updatedWallet = await this.updateWalletBalance(wallet, correctedBalance);
+    
+    return {
+      wallet: updatedWallet,
+      oldBalance,
+      newBalance: correctedBalance,
+      adjustment: correctedBalance - oldBalance
+    };
+  }
+
+  /**
+   * Recalculate wallet balance from all transactions
+   * This will scan all expenses and transfers to calculate the correct balance
+   */
+  async recalculateWalletBalance(walletId) {
+    if (!this.user?.id) {
+      throw new Error('User not authenticated');
+    }
+
+    const wallets = await supabaseWalletDB.getAll(this.user.id);
+    const wallet = wallets.find(w => w.id === walletId);
+    
+    if (!wallet) {
+      throw new Error(`Wallet with ID ${walletId} not found`);
+    }
+
+    // Get all expenses for this wallet
+    const { expenseDB: supabaseExpenseDB } = await import('./supabase-db');
+    const { transferDB: supabaseTransferDB } = await import('./supabase-db');
+    
+    const [expenses, transfers] = await Promise.all([
+      supabaseExpenseDB.getAll(this.user.id),
+      supabaseTransferDB.getAll(this.user.id)
+    ]);
+
+    // Filter expenses for this wallet (excluding soft-deleted ones)
+    const walletExpenses = expenses.filter(e => 
+      e.wallet_id === walletId && !e.deleted_at
+    );
+
+    // Filter transfers involving this wallet
+    const incomingTransfers = transfers.filter(t => t.toWallet === walletId);
+    const outgoingTransfers = transfers.filter(t => t.fromWallet === walletId);
+
+    // Calculate balance from transactions
+    let calculatedBalance = new Decimal(0);
+
+    // Add income, subtract expenses
+    walletExpenses.forEach(expense => {
+      if (expense.is_income) {
+        calculatedBalance = calculatedBalance.plus(expense.amount);
+      } else {
+        calculatedBalance = calculatedBalance.minus(expense.amount);
+      }
+    });
+
+    // Add incoming transfers
+    incomingTransfers.forEach(transfer => {
+      calculatedBalance = calculatedBalance.plus(transfer.amount);
+    });
+
+    // Subtract outgoing transfers
+    outgoingTransfers.forEach(transfer => {
+      calculatedBalance = calculatedBalance.minus(transfer.amount);
+    });
+
+    const oldBalance = wallet.balance;
+    const newBalance = calculatedBalance.toNumber();
+
+    console.log(`📊 Wallet balance recalculation:`, {
+      walletId: wallet.id,
+      walletName: wallet.name,
+      oldBalance: new Decimal(oldBalance).toFixed(2),
+      calculatedBalance: new Decimal(newBalance).toFixed(2),
+      difference: new Decimal(newBalance).minus(oldBalance).toFixed(2),
+      transactions: {
+        expenses: walletExpenses.length,
+        incomingTransfers: incomingTransfers.length,
+        outgoingTransfers: outgoingTransfers.length
+      }
+    });
+
+    // Update the wallet with calculated balance
+    const updatedWallet = await this.updateWalletBalance(wallet, newBalance);
+    
+    return {
+      wallet: updatedWallet,
+      oldBalance,
+      newBalance,
+      difference: newBalance - oldBalance,
+      transactionCounts: {
+        expenses: walletExpenses.length,
+        incomingTransfers: incomingTransfers.length,
+        outgoingTransfers: outgoingTransfers.length
+      }
+    };
   }
 }
 

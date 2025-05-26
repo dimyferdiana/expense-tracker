@@ -3,6 +3,7 @@ import { walletDB as supabaseWalletDB, transferDB as supabaseTransferDB } from '
 import { createWalletOperations, WalletUtils } from '../utils/walletOperations';
 import Modal from './Modal';
 import { useAuth } from '../contexts/AuthContext';
+import { safeSetItem } from '../utils/safeStorage';
 
 const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
   const [wallets, setWallets] = useState([]);
@@ -86,7 +87,7 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
             // Provide default wallets if none exist
             const defaultWallets = getDefaultWallets();
             setWallets(defaultWallets);
-            localStorage.setItem('wallets', JSON.stringify(defaultWallets));
+            safeSetItem('wallets', JSON.stringify(defaultWallets));
           }
           
           const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
@@ -140,7 +141,7 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
             } else {
               const defaultWallets = getDefaultWallets();
               setWallets(defaultWallets);
-              localStorage.setItem('wallets', JSON.stringify(defaultWallets));
+              safeSetItem('wallets', JSON.stringify(defaultWallets));
             }
           }
           
@@ -160,7 +161,7 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
           } else {
             const defaultWallets = getDefaultWallets();
             setWallets(defaultWallets);
-            localStorage.setItem('wallets', JSON.stringify(defaultWallets));
+            safeSetItem('wallets', JSON.stringify(defaultWallets));
           }
           
           const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
@@ -420,7 +421,7 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
           // Handle localStorage fallback
           const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
           const updatedTransfers = savedTransfers.filter(t => t.id !== transferId);
-          localStorage.setItem('wallet-transfers', JSON.stringify(updatedTransfers));
+          safeSetItem('wallet-transfers', JSON.stringify(updatedTransfers));
           
           if (isMounted.current) {
             setTransfers(updatedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
@@ -471,7 +472,7 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
         // Handle localStorage fallback with balance updates
         const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
         const updatedTransfers = savedTransfers.filter(t => t.id !== transferId);
-        localStorage.setItem('wallet-transfers', JSON.stringify(updatedTransfers));
+        safeSetItem('wallet-transfers', JSON.stringify(updatedTransfers));
         
         // Update wallet balances in localStorage
         const savedWallets = JSON.parse(localStorage.getItem('wallets') || '[]');
@@ -490,7 +491,7 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
             transferToDelete.amount
           );
           
-          localStorage.setItem('wallets', JSON.stringify(savedWallets));
+          safeSetItem('wallets', JSON.stringify(savedWallets));
           setWallets(savedWallets);
         }
         
@@ -533,7 +534,7 @@ const WalletTransfer = ({ dbInitialized, refreshWallets }) => {
           } else {
             const savedTransfers = JSON.parse(localStorage.getItem('wallet-transfers') || '[]');
             const updatedTransfers = savedTransfers.filter(t => t.id !== transferId);
-            localStorage.setItem('wallet-transfers', JSON.stringify(updatedTransfers));
+            safeSetItem('wallet-transfers', JSON.stringify(updatedTransfers));
             setTransfers(updatedTransfers.sort((a, b) => new Date(b.date) - new Date(a.date)));
           }
         } catch (refreshError) {

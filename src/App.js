@@ -7,6 +7,9 @@ import ForgotPassword from './components/ForgotPassword';
 import ResetPassword from './components/ResetPassword';
 import ProtectedRoute from './components/ProtectedRoute';
 import supabase from './utils/supabase';
+import LocalStorageManager from './utils/localStorageManager';
+import StorageDebugger from './utils/storageDebugger';
+import { safeSetItem, getStorageReport } from './utils/safeStorage';
 
 // TailwindCSS versions
 import ExpenseForm from './components/ExpenseForm';
@@ -45,9 +48,194 @@ import {
 } from './utils/supabase-db';
 import SupabaseSetupPrompt from './components/SupabaseSetupPrompt';
 import { createWalletOperations, WalletUtils } from './utils/walletOperations';
+import WalletRepair from './utils/walletRepair';
 import { useNotification } from './hooks/useNotification';
 import Onboarding from './components/Onboarding';
 import { useOnboarding } from './hooks/useOnboarding';
+
+// Emergency cleanup function with Arc browser detection
+const performEmergencyCleanup = () => {
+  try {
+    console.log('🚨 Performing emergency localStorage cleanup...');
+    
+    // Detect Arc browser
+    const isArc = navigator.userAgent.includes('Arc') || 
+                 (window.chrome && window.chrome.webstore) ||
+                 navigator.userAgent.includes('Chrome');
+    
+    // Get current usage
+    const beforeUsage = JSON.stringify(localStorage).length;
+    console.log('Storage before cleanup:', beforeUsage, 'bytes');
+    console.log('Browser detected:', isArc ? 'Arc/Chrome-based' : 'Other');
+    
+    // For Arc browser, be more aggressive
+    const essentialKeys = isArc ? 
+      ['user', 'auth', 'supabase.auth.token', 'sb-mplrakcyrohgkqdhzpry-auth-token'] :
+      ['user', 'auth', 'settings', 'onboarding', 'supabase.auth.token'];
+    
+    const allKeys = Object.keys(localStorage);
+    let removedCount = 0;
+    
+    allKeys.forEach(key => {
+      if (!essentialKeys.some(essential => key.includes(essential))) {
+        try {
+          localStorage.removeItem(key);
+          removedCount++;
+          if (isArc) {
+            console.log(`🌐 Arc cleanup removed: ${key}`);
+          }
+        } catch (e) {
+          console.warn('Failed to remove key:', key);
+        }
+      } else {
+        if (isArc) {
+          console.log(`🔒 Arc cleanup kept: ${key}`);
+        }
+      }
+    });
+    
+    const afterUsage = JSON.stringify(localStorage).length;
+    console.log('Storage after cleanup:', afterUsage, 'bytes');
+    console.log('✅ Emergency cleanup completed, freed up:', beforeUsage - afterUsage, 'bytes');
+    console.log('📊 Removed keys:', removedCount);
+    
+    // For Arc browser, if we freed significant space, suggest reload
+    if (isArc && (beforeUsage - afterUsage) > 1024 * 100) {
+      console.warn('🌐 Arc browser: Significant cleanup performed. Consider reloading page.');
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Emergency cleanup failed:', error);
+    return false;
+  }
+};
+
+// Perform immediate cleanup on app load
+performEmergencyCleanup();
+
+// Initialize localStorage monitoring early
+LocalStorageManager.initializeMonitoring();
+
+let lastQuotaErrorTime = 0;
+let lastQuotaErrorSource = '';
+const MIN_QUOTA_ERROR_INTERVAL = 2000; // 2 seconds
+
+// Enhanced quota error handler
+const handleQuotaError = (error, source = 'unknown') => {
+  const now = Date.now();
+  if (source === lastQuotaErrorSource && (now - lastQuotaErrorTime) < MIN_QUOTA_ERROR_INTERVAL) {
+    console.warn(`🚨 Quota error handling for ${source} already attempted recently. Skipping.`);
+    // Potentially re-throw or handle differently if it's a persistent loop
+    // For now, just preventing re-entrant cleanup chaos
+    return false; 
+  }
+  lastQuotaErrorTime = now;
+  lastQuotaErrorSource = source;
+
+  console.warn(`🚨 localStorage quota error detected from ${source}:`, error);
+  
+  try {
+    // Immediate emergency cleanup
+    performEmergencyCleanup();
+    
+    // Also try LocalStorageManager cleanup
+    LocalStorageManager.emergencyCleanup();
+    
+    return true;
+  } catch (cleanupError) {
+    console.error('All cleanup methods failed:', cleanupError);
+    return false;
+  }
+};
+
+// Global error handler for localStorage quota issues
+window.addEventListener('error', (event) => {
+  if (event.error && (
+    event.error.message.includes('QUOTA') || 
+    event.error.name === 'QuotaExceededError' ||
+    event.error.message.includes('quota exceeded')
+  )) {
+    handleQuotaError(event.error, 'window.error');
+  }
+});
+
+// Global promise rejection handler for localStorage quota issues
+window.addEventListener('unhandledrejection', (event) => {
+  if (event.reason && (
+    event.reason.message?.includes('QUOTA') || 
+    event.reason.name === 'QuotaExceededError' ||
+    event.reason.message?.includes('quota exceeded')
+  )) {
+    const handled = handleQuotaError(event.reason, 'unhandledrejection');
+    if (handled) {
+      // Prevent the error from being logged to console
+      event.preventDefault();
+    }
+  }
+});
+
+// Override localStorage methods to catch quota errors immediately
+const originalSetItem = localStorage.setItem;
+localStorage.setItem = function(key, value) {
+  // Aggressive logging for debugging quota issues
+  const valueSize = typeof value === 'string' ? value.length : 0;
+  console.log(`[localStorage.setItem] Attempting to set key: "${key}", Value size: ${valueSize} chars`);
+  
+  // Prevent extremely large writes (over 500KB)
+  if (valueSize > 1024 * 500) {
+    console.error(`🚨 BLOCKED: Attempted to write ${(valueSize / 1024).toFixed(2)} KB to key "${key}" - too large!`);
+    throw new Error(`QUOTA_BYTES quota exceeded - attempted write too large: ${(valueSize / 1024).toFixed(2)} KB`);
+  }
+  
+  if (valueSize > 1024 * 100) { // Log a warning for any writes over 100KB
+    console.warn(`[localStorage.setItem] WARNING: Large write to key "${key}", Size: ${(valueSize / 1024).toFixed(2)} KB`);
+    // To see the actual data (potentially very large and spammy, use with caution):
+    // console.log('[localStorage.setItem] Value for large write:', value.substring(0, 200) + '...');
+  }
+
+  // Check current storage usage before writing
+  const currentUsage = JSON.stringify(localStorage).length;
+  const projectedUsage = currentUsage + valueSize;
+  const STORAGE_LIMIT = 4 * 1024 * 1024; // 4MB limit to be safe
+  
+  if (projectedUsage > STORAGE_LIMIT) {
+    console.warn(`🚨 Storage limit would be exceeded. Current: ${(currentUsage / 1024).toFixed(2)} KB, Projected: ${(projectedUsage / 1024).toFixed(2)} KB`);
+    
+    // Perform emergency cleanup before attempting write
+    performEmergencyCleanup();
+    
+    // Check again after cleanup
+    const newCurrentUsage = JSON.stringify(localStorage).length;
+    const newProjectedUsage = newCurrentUsage + valueSize;
+    
+    if (newProjectedUsage > STORAGE_LIMIT) {
+      console.error(`🚨 Still would exceed limit after cleanup. Blocking write to "${key}"`);
+      throw new Error(`QUOTA_BYTES quota exceeded - storage limit reached even after cleanup`);
+    }
+  }
+
+  try {
+    return originalSetItem.call(this, key, value);
+  } catch (error) {
+    if (error.name === 'QuotaExceededError' || error.message.includes('QUOTA')) {
+      console.error(`🚨 localStorage.setItem FAILED for key: "${key}" due to QuotaExceededError. Value size: ${valueSize} chars`);
+      handleQuotaError(error, `localStorage.setItem for key: ${key}`);
+      
+      // Try again after cleanup
+      try {
+        console.log(`[localStorage.setItem] Retrying setItem for key: "${key}" after cleanup attempt.`);
+        return originalSetItem.call(this, key, value);
+      } catch (retryError) {
+        console.error(`🚨 localStorage.setItem FAILED AGAIN for key: "${key}" even after cleanup.`, retryError);
+        throw retryError; // Re-throw, let global handlers catch if needed
+      }
+    }
+    // For other errors, just re-throw
+    console.error(`[localStorage.setItem] Error setting key "${key}" (not quota related):`, error);
+    throw error;
+  }
+};
 
 // Main application content that requires authentication
 const AppContent = () => {
@@ -144,13 +332,6 @@ const AppContent = () => {
     setIsLoading(false);
   };
 
-  // Save expenses to localStorage (fallback)
-  useEffect(() => {
-    if (!supabaseInitialized && expenses.length > 0) {
-      localStorage.setItem('expenses', JSON.stringify(expenses));
-    }
-  }, [expenses, supabaseInitialized]);
-
   // Add new expense
   const addExpense = async (expense) => {
     try {
@@ -228,6 +409,28 @@ const AppContent = () => {
         return;
       }
       
+      // Detect Arc browser for more aggressive cleanup
+      const isArc = navigator.userAgent.includes('Arc') || 
+                   (window.chrome && window.chrome.webstore) ||
+                   navigator.userAgent.includes('Chrome');
+      
+      // Perform cleanup before attempting delete to prevent quota issues
+      try {
+        if (isArc) {
+          console.log('🌐 Arc browser detected - performing aggressive pre-delete cleanup');
+          // Use the Arc-specific cleanup
+          if (window.StorageDebugger) {
+            window.StorageDebugger.arcBrowserCleanup();
+          } else {
+            performEmergencyCleanup();
+          }
+        } else {
+          LocalStorageManager.performCleanup();
+        }
+      } catch (cleanupError) {
+        console.warn('Cleanup before delete failed:', cleanupError);
+      }
+      
       const walletOps = createWalletOperations(user);
       const result = await walletOps.deleteExpenseWithWalletUpdate(id);
       
@@ -237,6 +440,62 @@ const AppContent = () => {
       setRefreshWallets(prev => prev + 1);
     } catch (error) {
       console.error('Error deleting expense:', error);
+      
+      // Handle specific quota errors with Arc browser detection
+      if (error.message?.includes('QUOTA') || error.name === 'QuotaExceededError') {
+        console.warn('Quota error during delete, performing emergency cleanup...');
+        
+        const isArc = navigator.userAgent.includes('Arc') || 
+                     (window.chrome && window.chrome.webstore) ||
+                     navigator.userAgent.includes('Chrome');
+        
+        try {
+          if (isArc) {
+            console.log('🌐 Arc browser quota error - performing nuclear cleanup');
+            // For Arc browser, use the most aggressive cleanup
+            if (window.StorageDebugger) {
+              const result = window.StorageDebugger.arcBrowserCleanup();
+              if (result.success && result.freedBytes > 1024 * 50) {
+                // If we freed significant space, suggest reload
+                if (window.confirm('Arc browser storage cleaned. Reload page for best performance?')) {
+                  window.location.reload();
+                  return;
+                }
+              }
+            } else {
+              performEmergencyCleanup();
+            }
+          } else {
+            performEmergencyCleanup();
+            LocalStorageManager.emergencyCleanup();
+          }
+          
+          // Retry the delete operation
+          const walletOps = createWalletOperations(user);
+          const result = await walletOps.deleteExpenseWithWalletUpdate(id);
+          console.log('Expense deleted successfully after cleanup:', result);
+          await loadExpensesFromSupabase();
+          setRefreshWallets(prev => prev + 1);
+          return;
+        } catch (retryError) {
+          console.error('Delete failed even after cleanup:', retryError);
+          showError('Failed to delete expense due to storage limitations. Please try refreshing the page or clearing browser data.');
+          return;
+        }
+      }
+      
+      // Handle other errors
+      let userMessage = 'Failed to delete expense. ';
+      
+      if (error.message.includes('not found')) {
+        userMessage += 'The expense may have already been deleted.';
+      } else if (error.message.includes('session') || error.message.includes('authentication')) {
+        userMessage += 'Your session has expired. Please sign in again.';
+      } else {
+        userMessage += 'Please try again or contact support if the problem persists.';
+      }
+      
+      showError(userMessage);
       throw error;
     }
   };

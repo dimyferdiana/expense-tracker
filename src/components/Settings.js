@@ -7,6 +7,7 @@ import Badge from './Badge';
 import { colorClasses, getColorClasses, getColorName, availableColors } from '../utils/colors';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../hooks/useNotification';
+import { safeSetItem } from '../utils/safeStorage';
 
 function ConfirmationModal({ open, onClose, onConfirm, title, message }) {
   if (!open) return null;
@@ -305,7 +306,7 @@ function Settings({ dbInitialized = false }) {
         { id: 'other', name: 'Other', color: 'bg-lime-100 text-lime-800 dark:bg-lime-900 dark:text-lime-300' }
       ];
       setCategories(defaultCategories);
-      localStorage.setItem('expense-categories', JSON.stringify(defaultCategories));
+      safeSetItem('expense-categories', JSON.stringify(defaultCategories));
     }
 
     // Load tags
@@ -322,21 +323,21 @@ function Settings({ dbInitialized = false }) {
         { id: 'work', name: 'Work', color: 'indigo' }
       ];
       setTags(defaultTags);
-      localStorage.setItem('expense-tags', JSON.stringify(defaultTags));
+      safeSetItem('expense-tags', JSON.stringify(defaultTags));
     }
   };
 
   // Save categories to localStorage (if not using IndexedDB)
   useEffect(() => {
     if (!dbInitialized && categories.length > 0) {
-      localStorage.setItem('expense-categories', JSON.stringify(categories));
+      safeSetItem('expense-categories', JSON.stringify(categories));
     }
   }, [categories, dbInitialized]);
 
   // Save tags to localStorage (if not using IndexedDB)
   useEffect(() => {
     if (!dbInitialized && tags.length > 0) {
-      localStorage.setItem('expense-tags', JSON.stringify(tags));
+      safeSetItem('expense-tags', JSON.stringify(tags));
     }
   }, [tags, dbInitialized]);
 
@@ -359,7 +360,7 @@ function Settings({ dbInitialized = false }) {
             c.id === editingCategory.id ? updatedCategory : c
           );
           setCategories(updatedCategories);
-          localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
+          safeSetItem('expense-categories', JSON.stringify(updatedCategories));
         }
       } else {
         // Adding new category
@@ -387,7 +388,7 @@ function Settings({ dbInitialized = false }) {
           // Add to local state and localStorage
           const updatedCategories = [...categories, localCategory];
           setCategories(updatedCategories);
-          localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
+          safeSetItem('expense-categories', JSON.stringify(updatedCategories));
         }
       }
       
@@ -420,7 +421,7 @@ function Settings({ dbInitialized = false }) {
             t.id === editingTag.id ? updatedTag : t
           );
           setTags(updatedTags);
-          localStorage.setItem('expense-tags', JSON.stringify(updatedTags));
+          safeSetItem('expense-tags', JSON.stringify(updatedTags));
         }
       } else {
         // Adding new tag
@@ -448,7 +449,7 @@ function Settings({ dbInitialized = false }) {
           // Add to local state and localStorage
           const updatedTags = [...tags, localTag];
           setTags(updatedTags);
-          localStorage.setItem('expense-tags', JSON.stringify(updatedTags));
+          safeSetItem('expense-tags', JSON.stringify(updatedTags));
         }
       }
       
@@ -481,7 +482,7 @@ function Settings({ dbInitialized = false }) {
       } else {
         const updatedCategories = categories.filter(c => c.id !== id);
         setCategories(updatedCategories);
-        localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
+        safeSetItem('expense-categories', JSON.stringify(updatedCategories));
       }
       setShowConfirmModal(false);
     } catch (error) {
@@ -510,7 +511,7 @@ function Settings({ dbInitialized = false }) {
       } else {
         const updatedTags = tags.filter(t => t.id !== id);
         setTags(updatedTags);
-        localStorage.setItem('expense-tags', JSON.stringify(updatedTags));
+        safeSetItem('expense-tags', JSON.stringify(updatedTags));
       }
       setShowConfirmModal(false);
     } catch (error) {
@@ -595,6 +596,49 @@ function Settings({ dbInitialized = false }) {
             disabled={isLoading}
           >
             🧹 Cleanup Duplicates
+          </button>
+        )}
+        
+        {/* Arc Browser Cleanup Button */}
+        {(navigator.userAgent.includes('Arc') || navigator.userAgent.includes('Chrome')) && (
+          <button
+            onClick={() => {
+              if (window.StorageDebugger) {
+                window.StorageDebugger.arcBrowserCleanup();
+              } else {
+                console.warn('StorageDebugger not available');
+                // Fallback cleanup
+                const beforeUsage = JSON.stringify(localStorage).length;
+                const essentialKeys = ['user', 'auth', 'supabase.auth.token', 'sb-mplrakcyrohgkqdhzpry-auth-token'];
+                const allKeys = Object.keys(localStorage);
+                let removedCount = 0;
+                
+                allKeys.forEach(key => {
+                  if (!essentialKeys.some(essential => key.includes(essential))) {
+                    try {
+                      localStorage.removeItem(key);
+                      removedCount++;
+                    } catch (e) {
+                      console.warn('Failed to remove key:', key);
+                    }
+                  }
+                });
+                
+                const afterUsage = JSON.stringify(localStorage).length;
+                const freedBytes = beforeUsage - afterUsage;
+                
+                showSuccess(`Arc cleanup complete! Removed ${removedCount} items, freed ${(freedBytes / 1024).toFixed(2)} KB`);
+                
+                if (freedBytes > 1024 * 50) {
+                  if (window.confirm('Significant cleanup performed. Reload page for best performance?')) {
+                    window.location.reload();
+                  }
+                }
+              }
+            }}
+            className="ml-2 text-xs px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors"
+          >
+            🌐 Arc Cleanup
           </button>
         )}
       </div>
