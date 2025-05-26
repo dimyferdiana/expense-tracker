@@ -6,15 +6,21 @@ import {
 } from '../utils/supabase-db';
 import Modal from './Modal';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../hooks/useNotification';
+import { safeSetItem } from '../utils/safeStorage';
+import NotificationModal from './NotificationModal';
+import DateRangePicker from './DateRangePicker';
 
 const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
   const { user } = useAuth();
+  const { notification, showError, showSuccess, showConfirm, hideNotification } = useNotification();
   const [budgets, setBudgets] = useState([]);
   const [categories, setCategories] = useState([]);
   const [expensesByCategory, setExpensesByCategory] = useState({});
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingBudget, setEditingBudget] = useState(null);
+  const [activeDatePicker, setActiveDatePicker] = useState(null);
   
   // Filter states
   const [currentMonth, setCurrentMonth] = useState(() => {
@@ -168,7 +174,7 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
     e.preventDefault();
     
     if (!formData.category || !formData.amount) {
-      alert('Please enter both category and amount.');
+      showError('Please enter both category and amount.');
       return;
     }
     
@@ -194,7 +200,7 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
           const updatedBudgets = savedBudgets.map(b => 
             b.id === editingBudget.id ? budgetData : b
           );
-          localStorage.setItem('budgets', JSON.stringify(updatedBudgets));
+          safeSetItem('budgets', JSON.stringify(updatedBudgets));
           setBudgets(updatedBudgets);
         }
       } else {
@@ -207,7 +213,7 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
           budgetData.id = Date.now();
           const savedBudgets = JSON.parse(localStorage.getItem('budgets') || '[]');
           savedBudgets.push(budgetData);
-          localStorage.setItem('budgets', JSON.stringify(savedBudgets));
+          safeSetItem('budgets', JSON.stringify(savedBudgets));
           setBudgets(savedBudgets);
         }
       }
@@ -222,32 +228,35 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
       setIsModalOpen(false);
     } catch (error) {
       console.error('Error saving budget:', error);
-      alert('Failed to save budget. Please try again.');
+      showError('Failed to save budget. Please try again.');
     }
   };
   
   // Delete a budget
   const handleDeleteBudget = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this budget?')) {
-      return;
-    }
-    
-    try {
-      if (dbInitialized && user) {
-        await supabaseBudgetDB.delete(id, user.id);
-        const allBudgets = await supabaseBudgetDB.getAll(user.id);
-        setBudgets(allBudgets);
-      } else {
-        // Delete from localStorage
-        const savedBudgets = JSON.parse(localStorage.getItem('budgets') || '[]');
-        const updatedBudgets = savedBudgets.filter(b => b.id !== id);
-        localStorage.setItem('budgets', JSON.stringify(updatedBudgets));
-        setBudgets(updatedBudgets);
-      }
-    } catch (error) {
-      console.error('Error deleting budget:', error);
-      alert('Failed to delete budget. Please try again.');
-    }
+    showConfirm(
+      'Are you sure you want to delete this budget? This action cannot be undone.',
+      async () => {
+        try {
+          if (dbInitialized && user) {
+            await supabaseBudgetDB.delete(id, user.id);
+            const allBudgets = await supabaseBudgetDB.getAll(user.id);
+            setBudgets(allBudgets);
+          } else {
+            // Delete from localStorage
+            const savedBudgets = JSON.parse(localStorage.getItem('budgets') || '[]');
+            const updatedBudgets = savedBudgets.filter(b => b.id !== id);
+            safeSetItem('budgets', JSON.stringify(updatedBudgets));
+            setBudgets(updatedBudgets);
+          }
+          showSuccess('Budget deleted successfully.');
+        } catch (error) {
+          console.error('Error deleting budget:', error);
+          showError('Failed to delete budget. Please try again.');
+        }
+      },
+      'Delete Budget'
+    );
   };
   
   // Handle month change
@@ -282,6 +291,17 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
   const getCategoryName = (categoryId) => {
     const category = categories.find(c => c.id === categoryId);
     return category ? category.name : categoryId;
+  };
+
+  // Format a date string as a human-readable date
+  const formatDateForDisplay = (date) => {
+    if (!date) return '';
+    const dateObj = typeof date === 'string' ? new Date(date) : date;
+    return dateObj.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric' 
+    });
   };
   
   if (isLoading) {
@@ -483,17 +503,55 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
               </select>
             </div>
             
-            <div className="mb-4">
+            <div className="mb-4 relative">
               <label className="block text-gray-300 text-sm font-medium mb-2">
                 Start Date
               </label>
               <input
-                type="date"
-                name="startDate"
-                value={formData.startDate}
-                onChange={handleChange}
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                type="text"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                placeholder="Select date"
+                readOnly
+                value={formData.startDate ? formatDateForDisplay(formData.startDate) : ''}
+                onClick={() => setActiveDatePicker('startDate')}
               />
+              {activeDatePicker === 'startDate' && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 date-picker-container">
+                  <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4">
+                    <div className="flex justify-between items-center mb-4">
+                      <h4 className="text-lg font-medium text-white">Select Start Date</h4>
+                      <button
+                        type="button"
+                        className="text-gray-400 hover:text-white p-2 rounded-full"
+                        onClick={() => setActiveDatePicker(null)}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                    <DateRangePicker
+                      value={{
+                        start: formData.startDate ? new Date(formData.startDate) : null,
+                        end: null
+                      }}
+                      onChange={(range) => {
+                        if (range.start) {
+                          const dateString = range.start.toISOString().slice(0, 10);
+                          setFormData(prev => ({
+                            ...prev,
+                            startDate: dateString
+                          }));
+                        }
+                        setActiveDatePicker(null);
+                      }}
+                      onClose={() => setActiveDatePicker(null)}
+                      isSingleDatePicker={true}
+                      pickerLabel="Select Start Date"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
             
             <div className="mb-6">
@@ -528,6 +586,21 @@ const BudgetManager = ({ dbInitialized, refresh = 0 }) => {
           </form>
         </div>
       </Modal>
+      
+      {/* Notification Modal */}
+      {notification && (
+        <NotificationModal
+          isOpen={notification.isOpen}
+          onClose={hideNotification}
+          title={notification.title}
+          message={notification.message}
+          type={notification.type}
+          showCancel={notification.showCancel}
+          onConfirm={notification.onConfirm}
+          confirmText={notification.confirmText}
+          cancelText={notification.cancelText}
+        />
+      )}
     </div>
   );
 };

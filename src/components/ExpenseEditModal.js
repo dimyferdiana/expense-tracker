@@ -1,16 +1,18 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Combobox, ComboboxLabel, ComboboxOption } from './Combobox';
-import TagSelector, { TagSelectorWithLabel } from './TagSelector';
+import { TagSelectorWithLabel } from './TagSelector';
 import { categoryDB as supabaseCategoryDB, tagDB as supabaseTagDB, walletDB as supabaseWalletDB } from '../utils/supabase-db';
 import DateRangePicker from './DateRangePicker';
 import Badge from './Badge';
 import { getColorName } from '../utils/colors';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../hooks/useNotification';
+import { safeSetItem } from '../utils/safeStorage';
+import NotificationModal from './NotificationModal';
 
 function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized = false }) {
   const { user } = useAuth();
-  const { showError, showWarning } = useNotification();
+  const { notification, showError, showWarning, showConfirm, hideNotification } = useNotification();
   
   const [formData, setFormData] = useState({
     id: expense.id,
@@ -103,10 +105,10 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
     };
 
     loadData();
-  }, [dbInitialized, expense.category, expense.wallet_id, user]);
+  }, [dbInitialized, expense.category, expense.wallet_id, user, formData.wallet_id]);
 
   // Load categories from localStorage if needed
-  const loadFromLocalStorage = () => {
+  const loadFromLocalStorage = useCallback(() => {
     const savedCategories = localStorage.getItem('expense-categories');
     if (savedCategories) {
       setCategories(JSON.parse(savedCategories));
@@ -121,10 +123,10 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
         setFormData(prev => ({ ...prev, wallet_id: parsedWallets[0].id }));
       }
     }
-  };
+  }, [formData.wallet_id]);
 
   // Load tags from localStorage if needed
-  const loadTagsFromLocalStorage = () => {
+  const loadTagsFromLocalStorage = useCallback(() => {
     const savedTags = localStorage.getItem('expense-tags');
     if (savedTags) {
       setTags(JSON.parse(savedTags));
@@ -138,7 +140,7 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
         { id: 'work', name: 'Work' }
       ]);
     }
-  };
+  }, []);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -246,7 +248,13 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
         };
         const updatedCategories = [...categories, localCategory];
         setCategories(updatedCategories);
-        localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
+        try {
+          safeSetItem('expense-categories', JSON.stringify(updatedCategories));
+        } catch (storageError) {
+          console.error('Failed to save categories to localStorage:', storageError);
+          showError('Failed to save category due to storage limitations.');
+          return;
+        }
         setFormData(prev => ({ ...prev, category: localCategory.id })); // Select the new category
       }
       setNewCategoryName('');
@@ -265,13 +273,11 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
     e.preventDefault();
     
     if (!formData.description?.trim()) {
-      setError('Please enter a description');
+      showError('Please enter a description');
       return;
     }
     
     try {
-      setIsSubmitting(true);
-      
       // Format the data for the database
       const expenseData = {
         id: expense.id,
@@ -299,8 +305,6 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
       onCancel();
     } catch (error) {
       showError('There was a problem saving your expense. Please try again.');
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -739,10 +743,14 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
             <button
               type="button"
               onClick={() => {
-                if (window.confirm('Are you sure you want to delete this transaction?')) {
-                  onDelete && onDelete(formData.id);
-                  onCancel && onCancel();
-                }
+                showConfirm(
+                  'Are you sure you want to delete this transaction? This action cannot be undone.',
+                  () => {
+                    onDelete && onDelete(formData.id);
+                    onCancel && onCancel();
+                  },
+                  'Delete Transaction'
+                );
               }}
               className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors duration-300"
             >
@@ -771,6 +779,21 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
           </div>
         </div>
       </div>
+      
+      {/* Notification Modal */}
+      {notification && (
+        <NotificationModal
+          isOpen={notification.isOpen}
+          onClose={hideNotification}
+          title={notification.title}
+          message={notification.message}
+          type={notification.type}
+          showCancel={notification.showCancel}
+          onConfirm={notification.onConfirm}
+          confirmText={notification.confirmText}
+          cancelText={notification.cancelText}
+        />
+      )}
     </div>
   );
 }

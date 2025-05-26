@@ -9,6 +9,7 @@ const SyncStatus = ({ className = '' }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
   const [syncError, setSyncError] = useState(null);
+  const [processingQueue, setProcessingQueue] = useState(false);
 
   // Listen for online/offline events
   useEffect(() => {
@@ -34,6 +35,7 @@ const SyncStatus = ({ className = '' }) => {
         setIsSyncing(status.inProgress);
         setLastSync(status.lastSync);
         setSyncError(status.errors.length > 0 ? status.errors[status.errors.length - 1] : null);
+        setProcessingQueue(!!status.processingQueue);
       }
     };
 
@@ -86,6 +88,14 @@ const SyncStatus = ({ className = '' }) => {
 
   // Get status icon and color
   const getStatusDisplay = () => {
+    if (processingQueue) {
+      return {
+        icon: '⏳',
+        color: 'text-blue-600',
+        bgColor: 'bg-blue-100',
+        text: 'Processing queue...'
+      };
+    }
     if (!isOnline) {
       return {
         icon: '📴',
@@ -139,7 +149,7 @@ const SyncStatus = ({ className = '' }) => {
         className={`flex items-center space-x-1 px-2 py-1 rounded-full text-xs font-medium ${statusDisplay.color} ${statusDisplay.bgColor}`}
         title={`Last sync: ${formatLastSync(lastSync)}`}
       >
-        <span className={isSyncing ? 'animate-spin' : ''}>{statusDisplay.icon}</span>
+        <span className={isSyncing || processingQueue ? 'animate-spin' : ''}>{statusDisplay.icon}</span>
         <span className="hidden sm:inline">{statusDisplay.text}</span>
       </div>
 

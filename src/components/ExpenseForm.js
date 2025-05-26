@@ -7,6 +7,7 @@ import Badge from './Badge';
 import { getColorName } from '../utils/colors';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../hooks/useNotification';
+import { safeSetItem } from '../utils/safeStorage';
 
 function CategoryModal({ open, onClose, onSave }) {
   const [input, setInput] = useState('');
@@ -343,7 +344,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
         };
         const updatedCategories = [...categories, localCategory];
         setCategories(updatedCategories);
-        localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
+        safeSetItem('expense-categories', JSON.stringify(updatedCategories));
         
         // Select the new category
         setSelectedCategory(localCategory);
@@ -432,6 +433,11 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
       setPreviewUrl('');
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
+      }
+      
+      // Close the modal after successful submission
+      if (typeof onClose === 'function') {
+        onClose();
       }
     } catch (error) {
       console.error("Error adding expense:", error);

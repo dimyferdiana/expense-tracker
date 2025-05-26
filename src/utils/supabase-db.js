@@ -244,35 +244,33 @@ export const categoryDB = {
     if (!userId) throw new Error('User not authenticated');
     
     try {
-      // Check if category with this name already exists (case-insensitive)
-      const { data: existingByName } = await supabase
-        .from('categories')
-        .select('id, name')
-        .eq('user_id', userId)
-        .ilike('name', category.name.trim());
-        
-      if (existingByName && existingByName.length > 0) {
-        throw new Error(`Category with name "${category.name}" already exists`);
-      }
-      
       const categoryData = {
+        // If category has an ID, include it for upsert, otherwise let Supabase generate one
+        ...(category.id && { id: category.id }), 
         name: category.name.trim(),
-        user_id: userId 
+        user_id: userId,
+        // Ensure other fields like 'color' are handled if they exist on the category object
+        ...(category.color && { color: category.color }),
+        last_modified: new Date().toISOString(),
+        sync_status: 'synced' 
       };
-      
-      // Don't include custom ID - let database auto-generate UUID
       
       const { data, error } = await supabase
         .from('categories')
-        .insert([categoryData])
+        .upsert(categoryData, { onConflict: 'id' }) // Upsert based on ID
         .select()
         .single();
         
-      if (error) throw error;
+      if (error) {
+        // Log specific Supabase error for better debugging
+        console.error('Supabase error adding/updating category:', error);
+        throw error;
+      }
       return data;
     } catch (error) {
-      console.error('Error adding category:', error);
-      throw error;
+      // Catch and re-throw for consistent error handling
+      console.error('Error in categoryDB.add:', error.message);
+      throw new Error(`Failed to add/update category: ${error.message}`);
     }
   },
   
@@ -416,17 +414,27 @@ export const walletDB = {
     if (!userId) throw new Error('User not authenticated');
     
     try {
+      const walletData = {
+        ...wallet, // Spread existing wallet data (id, name, type, balance, etc.)
+        user_id: userId,
+        last_modified: new Date().toISOString(),
+        sync_status: 'synced'
+      };
+
       const { data, error } = await supabase
         .from('wallets')
-        .insert([{ ...wallet, user_id: userId }])
+        .upsert(walletData, { onConflict: 'id' }) // Upsert based on ID
         .select()
         .single();
         
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase error adding/updating wallet:', error);
+        throw error;
+      }
       return data;
     } catch (error) {
-      console.error('Error adding wallet:', error);
-      throw error;
+      console.error('Error in walletDB.add:', error.message);
+      throw new Error(`Failed to add/update wallet: ${error.message}`);
     }
   },
   
@@ -518,35 +526,28 @@ export const tagDB = {
     if (!userId) throw new Error('User not authenticated');
     
     try {
-      // Check if tag with this name already exists (case-insensitive)
-      const { data: existingByName } = await supabase
-        .from('tags')
-        .select('id, name')
-        .eq('user_id', userId)
-        .ilike('name', tag.name.trim());
-        
-      if (existingByName && existingByName.length > 0) {
-        throw new Error(`Tag with name "${tag.name}" already exists`);
-      }
-      
       const tagData = {
+        ...(tag.id && { id: tag.id }), // If tag has an ID, include it for upsert
         name: tag.name.trim(),
-        user_id: userId 
+        user_id: userId,
+        last_modified: new Date().toISOString(),
+        sync_status: 'synced' 
       };
-      
-      // Don't include custom ID - let database auto-generate UUID
       
       const { data, error } = await supabase
         .from('tags')
-        .insert([tagData])
+        .upsert(tagData, { onConflict: 'id' }) // Upsert based on ID
         .select()
         .single();
         
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase error adding/updating tag:', error);
+        throw error;
+      }
       return data;
     } catch (error) {
-      console.error('Error adding tag:', error);
-      throw error;
+      console.error('Error in tagDB.add:', error.message);
+      throw new Error(`Failed to add/update tag: ${error.message}`);
     }
   },
   
@@ -846,7 +847,7 @@ export const recurringDB = {
         .from('recurring')
         .select('*')
         .eq('user_id', userId)
-        .order('nextDate', { ascending: true });
+        .order('next_date', { ascending: true });
         
       if (error) throw error;
       return data || [];
@@ -950,7 +951,7 @@ export const recurringDB = {
         .from('recurring')
         .select('*')
         .eq('user_id', userId)
-        .lte('nextDate', formattedDate);
+        .lte('next_date', formattedDate);
         
       if (error) throw error;
       return data || [];

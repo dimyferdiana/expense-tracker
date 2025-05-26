@@ -3,6 +3,7 @@ import Badge from './Badge';
 import { tagDB as supabaseTagDB } from '../utils/supabase-db';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../hooks/useNotification';
+import { safeSetItem } from '../utils/safeStorage';
 
 const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChange, dbInitialized = false, id }, ref) => {
   const { user } = useAuth();
@@ -120,7 +121,7 @@ const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChang
           const savedTags = JSON.parse(localStorage.getItem('expense-tags') || '[]');
           if (!savedTags.some(t => t.id === tagId || t.name.toLowerCase() === newTagName.trim().toLowerCase())) {
             savedTags.push(newTag);
-            localStorage.setItem('expense-tags', JSON.stringify(savedTags));
+            safeSetItem('expense-tags', JSON.stringify(savedTags));
           }
         } catch (e) {
           console.error("Error saving tag to localStorage:", e);
