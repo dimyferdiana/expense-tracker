@@ -19,6 +19,7 @@ import WalletTransfer from './components/WalletTransfer';
 import BottomNavigation from './components/BottomNavigation';
 import FloatingActionButton from './components/FloatingActionButton';
 import Modal from './components/Modal';
+import NotificationModal from './components/NotificationModal';
 import Navbar from './components/Navbar';
 import { 
   Dropdown, 
@@ -44,10 +45,14 @@ import {
 } from './utils/supabase-db';
 import SupabaseSetupPrompt from './components/SupabaseSetupPrompt';
 import { createWalletOperations, WalletUtils } from './utils/walletOperations';
+import { useNotification } from './hooks/useNotification';
+import Onboarding from './components/Onboarding';
+import { useOnboarding } from './hooks/useOnboarding';
 
 // Main application content that requires authentication
 const AppContent = () => {
   const { user, signOut, isSessionValid, refreshSession } = useAuth();
+  const { notification, showError, hideNotification } = useNotification();
   const [activeTab, setActiveTab] = useState('home');
   const [expenses, setExpenses] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -209,7 +214,8 @@ const AppContent = () => {
         userMessage += 'Please try again or contact support if the problem persists.';
       }
       
-      alert(userMessage);
+      hideNotification();
+      showError(userMessage);
       throw error;
     }
   };
@@ -338,14 +344,57 @@ const AppContent = () => {
           dbInitialized={supabaseInitialized}
         />
       </Modal>
+
+      {/* Notification Modal */}
+      {notification && (
+        <NotificationModal
+          isOpen={notification.isOpen}
+          onClose={hideNotification}
+          title={notification.title}
+          message={notification.message}
+          type={notification.type}
+          showCancel={notification.showCancel}
+          onConfirm={notification.onConfirm}
+          confirmText={notification.confirmText}
+          cancelText={notification.cancelText}
+        />
+      )}
     </>
   );
 };
 
 // Main App component
 function App() {
+  const { hasSeenOnboarding, isLoading, completeOnboarding } = useOnboarding();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-900">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+        <span className="ml-2 text-white">Loading...</span>
+      </div>
+    );
+  }
+
   return (
     <Routes>
+      {/* Onboarding Route */}
+      <Route 
+        path="/onboarding" 
+        element={
+          <Onboarding 
+            onComplete={() => {
+              completeOnboarding();
+              // Navigate to signup after completing onboarding
+            }}
+            onSkip={() => {
+              completeOnboarding();
+              // Navigate to signup when skipping
+            }}
+          />
+        } 
+      />
+      
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -360,10 +409,19 @@ function App() {
         }
       />
       
-      <Route path="/" element={<Navigate to="/dashboard" replace />} />
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      {/* Default route - show onboarding if not seen, otherwise go to dashboard */}
+      <Route 
+        path="/" 
+        element={
+          hasSeenOnboarding ? 
+            <Navigate to="/dashboard" replace /> : 
+            <Navigate to="/onboarding" replace />
+        } 
+      />
+      
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
 
-export default App; 
+export default App;

@@ -4,6 +4,7 @@ import { WalletUtils } from '../utils/walletOperations';
 import { Combobox, ComboboxLabel, ComboboxOption } from './Combobox';
 import Modal from './Modal';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../hooks/useNotification';
 
 const WALLET_TYPES = [
   { id: 'cash', name: 'Cash' },
@@ -26,6 +27,7 @@ function Wallets({ dbInitialized = false, refresh = 0 }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   
   const { user } = useAuth();
+  const { showError, showWarning } = useNotification();
 
   useEffect(() => {
     loadWallets();
@@ -94,9 +96,8 @@ function Wallets({ dbInitialized = false, refresh = 0 }) {
       resetForm();
       setIsModalOpen(false);
       loadWallets();
-    } catch (e) {
-      console.error('Error saving wallet:', e);
-      alert('Error saving wallet');
+    } catch (error) {
+      showError('Error saving wallet');
     }
   };
 
@@ -120,9 +121,8 @@ function Wallets({ dbInitialized = false, refresh = 0 }) {
         deleteLocal(id);
       }
       loadWallets();
-    } catch (e) {
-      console.error('Error deleting wallet:', e);
-      alert('Error deleting wallet');
+    } catch (error) {
+      showError('Error deleting wallet');
     }
   };
 
@@ -161,8 +161,7 @@ function Wallets({ dbInitialized = false, refresh = 0 }) {
         // Reload the page
         window.location.reload();
       } catch (error) {
-        console.error('Error resetting database:', error);
-        alert('Failed to reset database. Please try manually clearing site data in your browser settings.');
+        showWarning('Failed to reset database. Please try manually clearing site data in your browser settings.');
       }
     }
   };

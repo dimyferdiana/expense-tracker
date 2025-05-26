@@ -11,6 +11,9 @@ CREATE TABLE expenses (
   notes TEXT,
   photoUrl TEXT,
   tags TEXT[] DEFAULT '{}',
+  deleted_at TIMESTAMP WITH TIME ZONE,
+  last_modified TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  sync_status TEXT DEFAULT 'synced',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -20,6 +23,10 @@ CREATE TABLE categories (
   id TEXT PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  color TEXT,
+  deleted_at TIMESTAMP WITH TIME ZONE,
+  last_modified TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  sync_status TEXT DEFAULT 'synced',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -28,6 +35,10 @@ CREATE TABLE tags (
   id TEXT PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  color TEXT,
+  deleted_at TIMESTAMP WITH TIME ZONE,
+  last_modified TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  sync_status TEXT DEFAULT 'synced',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -38,6 +49,9 @@ CREATE TABLE wallets (
   name TEXT NOT NULL,
   type TEXT NOT NULL,
   balance DECIMAL(12, 2) DEFAULT 0,
+  deleted_at TIMESTAMP WITH TIME ZONE,
+  last_modified TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  sync_status TEXT DEFAULT 'synced',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -55,6 +69,9 @@ CREATE TABLE transfers (
   notes TEXT,
   photoUrl TEXT,
   timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  deleted_at TIMESTAMP WITH TIME ZONE,
+  last_modified TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  sync_status TEXT DEFAULT 'synced',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -66,6 +83,9 @@ CREATE TABLE budgets (
   category TEXT NOT NULL,
   amount DECIMAL(12, 2) NOT NULL,
   period TEXT NOT NULL,
+  deleted_at TIMESTAMP WITH TIME ZONE,
+  last_modified TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  sync_status TEXT DEFAULT 'synced',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

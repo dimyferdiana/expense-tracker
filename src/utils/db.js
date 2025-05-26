@@ -1,7 +1,7 @@
 // IndexedDB database utility for expense tracker
 
 const DB_NAME = 'expense-tracker-db';
-const DB_VERSION = 7; // Incremented for budget feature
+const DB_VERSION = 8; // Incremented for deletion tracking feature
 const EXPENSES_STORE = 'expenses';
 const CATEGORIES_STORE = 'categories';
 const TAGS_STORE = 'tags';
@@ -191,6 +191,38 @@ const initDB = () => {
           transfersStore.createIndex('toWallet', 'toWallet', { unique: false });
         }
       }
+      
+      // Upgrade to version 8 - add deletion tracking and sync metadata
+      if (oldVersion < 8) {
+        const transaction = event.target.transaction;
+        const storeNames = [EXPENSES_STORE, CATEGORIES_STORE, TAGS_STORE, WALLETS_STORE, RECURRING_STORE, BUDGET_STORE, TRANSFERS_STORE];
+        
+        // Add deletion tracking fields to all existing records
+        for (const storeName of storeNames) {
+          if (db.objectStoreNames.contains(storeName)) {
+            const store = transaction.objectStore(storeName);
+            
+            store.openCursor().onsuccess = (event) => {
+              const cursor = event.target.result;
+              if (cursor) {
+                const record = cursor.value;
+                const now = new Date().toISOString();
+                
+                // Add deletion tracking fields if they don't exist
+                const updatedRecord = {
+                  ...record,
+                  deleted_at: record.deleted_at || null,
+                  last_modified: record.last_modified || now,
+                  sync_status: record.sync_status || 'pending'
+                };
+                
+                cursor.update(updatedRecord);
+                cursor.continue();
+              }
+            };
+          }
+        }
+      }
     };
 
     request.onsuccess = (event) => {
@@ -208,8 +240,38 @@ const initDB = () => {
 
 // Expense operations
 const expenseDB = {
-  // Get all expenses
+  // Get all active expenses (excluding deleted)
   getAll: () => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(EXPENSES_STORE, 'readonly');
+        const store = transaction.objectStore(EXPENSES_STORE);
+        const getAllRequest = store.getAll();
+        
+        getAllRequest.onsuccess = () => {
+          // Filter out deleted items
+          const activeExpenses = getAllRequest.result.filter(expense => !expense.deleted_at);
+          resolve(activeExpenses);
+          db.close();
+        };
+        
+        getAllRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Get all expenses including deleted (for sync purposes)
+  getAllIncludingDeleted: () => {
     return new Promise((resolve, reject) => {
       const request = window.indexedDB.open(DB_NAME, DB_VERSION);
       
@@ -246,6 +308,8 @@ const expenseDB = {
         const transaction = db.transaction(EXPENSES_STORE, 'readwrite');
         const store = transaction.objectStore(EXPENSES_STORE);
         
+        const now = new Date().toISOString();
+        
         // Make sure ID is a number and include new fields
         const newExpense = {
           ...expense,
@@ -253,7 +317,10 @@ const expenseDB = {
           walletId: expense.walletId || 'cash',
           isIncome: expense.isIncome || false,
           notes: expense.notes || '',
-          photoUrl: expense.photoUrl || ''
+          photoUrl: expense.photoUrl || '',
+          deleted_at: null,
+          last_modified: now,
+          sync_status: 'pending'
         };
         
         const addRequest = store.add(newExpense);
@@ -285,19 +352,23 @@ const expenseDB = {
         const transaction = db.transaction(EXPENSES_STORE, 'readwrite');
         const store = transaction.objectStore(EXPENSES_STORE);
         
-        // Preserve all fields including new ones
+        const now = new Date().toISOString();
+        
+        // Preserve all fields including new ones and update metadata
         const updatedExpense = { 
           ...expense, 
           walletId: expense.walletId || 'cash',
           isIncome: expense.isIncome || false,
           notes: expense.notes || '',
-          photoUrl: expense.photoUrl || ''
+          photoUrl: expense.photoUrl || '',
+          last_modified: now,
+          sync_status: 'pending'
         };
         
         const updateRequest = store.put(updatedExpense);
         
         updateRequest.onsuccess = () => {
-          resolve(expense);
+          resolve(updatedExpense);
           db.close();
         };
         
@@ -313,8 +384,64 @@ const expenseDB = {
     });
   },
   
-  // Delete an expense
+  // Soft delete an expense (tombstone pattern)
   delete: (id) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(EXPENSES_STORE, 'readwrite');
+        const store = transaction.objectStore(EXPENSES_STORE);
+        
+        // First get the existing record
+        const getRequest = store.get(id);
+        
+        getRequest.onsuccess = () => {
+          const expense = getRequest.result;
+          if (!expense) {
+            reject(new Error('Expense not found'));
+            db.close();
+            return;
+          }
+          
+          const now = new Date().toISOString();
+          
+          // Mark as deleted instead of removing
+          const deletedExpense = {
+            ...expense,
+            deleted_at: now,
+            last_modified: now,
+            sync_status: 'pending'
+          };
+          
+          const updateRequest = store.put(deletedExpense);
+          
+          updateRequest.onsuccess = () => {
+            resolve(id);
+            db.close();
+          };
+          
+          updateRequest.onerror = (error) => {
+            reject(error);
+            db.close();
+          };
+        };
+        
+        getRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Hard delete an expense (for cleanup purposes)
+  hardDelete: (id) => {
     return new Promise((resolve, reject) => {
       const request = window.indexedDB.open(DB_NAME, DB_VERSION);
       
@@ -331,6 +458,61 @@ const expenseDB = {
         };
         
         deleteRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Restore a deleted expense
+  restore: (id) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(EXPENSES_STORE, 'readwrite');
+        const store = transaction.objectStore(EXPENSES_STORE);
+        
+        const getRequest = store.get(id);
+        
+        getRequest.onsuccess = () => {
+          const expense = getRequest.result;
+          if (!expense) {
+            reject(new Error('Expense not found'));
+            db.close();
+            return;
+          }
+          
+          const now = new Date().toISOString();
+          
+          // Remove deletion marker
+          const restoredExpense = {
+            ...expense,
+            deleted_at: null,
+            last_modified: now,
+            sync_status: 'pending'
+          };
+          
+          const updateRequest = store.put(restoredExpense);
+          
+          updateRequest.onsuccess = () => {
+            resolve(restoredExpense);
+            db.close();
+          };
+          
+          updateRequest.onerror = (error) => {
+            reject(error);
+            db.close();
+          };
+        };
+        
+        getRequest.onerror = (error) => {
           reject(error);
           db.close();
         };
@@ -1351,6 +1533,184 @@ const resetDatabase = async () => {
   }
 };
 
+// Cleanup utilities for deletion tracking
+const cleanupUtils = {
+  // Clean up old tombstones (older than specified days)
+  cleanupOldTombstones: async (daysOld = 30) => {
+    const cutoffDate = new Date(Date.now() - daysOld * 24 * 60 * 60 * 1000).toISOString();
+    const stores = [EXPENSES_STORE, CATEGORIES_STORE, TAGS_STORE, WALLETS_STORE, RECURRING_STORE, BUDGET_STORE, TRANSFERS_STORE];
+    
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = async (event) => {
+        const db = event.target.result;
+        let totalCleaned = 0;
+        
+        try {
+          for (const storeName of stores) {
+            if (db.objectStoreNames.contains(storeName)) {
+              const transaction = db.transaction(storeName, 'readwrite');
+              const store = transaction.objectStore(storeName);
+              
+              const getAllRequest = store.getAll();
+              getAllRequest.onsuccess = () => {
+                const records = getAllRequest.result;
+                const toDelete = records.filter(record => 
+                  record.deleted_at && record.deleted_at < cutoffDate
+                );
+                
+                toDelete.forEach(record => {
+                  store.delete(record.id);
+                  totalCleaned++;
+                });
+              };
+            }
+          }
+          
+          db.close();
+          resolve({ cleaned: totalCleaned, cutoffDate });
+        } catch (error) {
+          db.close();
+          reject(error);
+        }
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Get statistics about deleted items
+  getDeletionStats: async () => {
+    const stores = [EXPENSES_STORE, CATEGORIES_STORE, TAGS_STORE, WALLETS_STORE, RECURRING_STORE, BUDGET_STORE, TRANSFERS_STORE];
+    
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = async (event) => {
+        const db = event.target.result;
+        const stats = {};
+        
+        try {
+          for (const storeName of stores) {
+            if (db.objectStoreNames.contains(storeName)) {
+              const transaction = db.transaction(storeName, 'readonly');
+              const store = transaction.objectStore(storeName);
+              
+              const getAllRequest = store.getAll();
+              getAllRequest.onsuccess = () => {
+                const records = getAllRequest.result;
+                const active = records.filter(record => !record.deleted_at);
+                const deleted = records.filter(record => record.deleted_at);
+                
+                stats[storeName] = {
+                  total: records.length,
+                  active: active.length,
+                  deleted: deleted.length,
+                  deletedOlderThan30Days: deleted.filter(record => {
+                    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+                    return new Date(record.deleted_at) < thirtyDaysAgo;
+                  }).length
+                };
+              };
+            }
+          }
+          
+          db.close();
+          resolve(stats);
+        } catch (error) {
+          db.close();
+          reject(error);
+        }
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+  
+  // Validate data integrity
+  validateDataIntegrity: async () => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = async (event) => {
+        const db = event.target.result;
+        const issues = [];
+        
+        try {
+          // Get all data
+          const expensesTransaction = db.transaction(EXPENSES_STORE, 'readonly');
+          const expensesStore = expensesTransaction.objectStore(EXPENSES_STORE);
+          const expensesRequest = expensesStore.getAll();
+          
+          const categoriesTransaction = db.transaction(CATEGORIES_STORE, 'readonly');
+          const categoriesStore = categoriesTransaction.objectStore(CATEGORIES_STORE);
+          const categoriesRequest = categoriesStore.getAll();
+          
+          const walletsTransaction = db.transaction(WALLETS_STORE, 'readonly');
+          const walletsStore = walletsTransaction.objectStore(WALLETS_STORE);
+          const walletsRequest = walletsStore.getAll();
+          
+          Promise.all([
+            new Promise(resolve => { expensesRequest.onsuccess = () => resolve(expensesRequest.result); }),
+            new Promise(resolve => { categoriesRequest.onsuccess = () => resolve(categoriesRequest.result); }),
+            new Promise(resolve => { walletsRequest.onsuccess = () => resolve(walletsRequest.result); })
+          ]).then(([expenses, categories, wallets]) => {
+            const activeExpenses = expenses.filter(e => !e.deleted_at);
+            const activeCategories = categories.filter(c => !c.deleted_at);
+            const activeWallets = wallets.filter(w => !w.deleted_at);
+            
+            const categoryIds = new Set(activeCategories.map(c => c.id));
+            const walletIds = new Set(activeWallets.map(w => w.id));
+            
+            // Check for orphaned expenses
+            activeExpenses.forEach(expense => {
+              if (!categoryIds.has(expense.category)) {
+                issues.push({
+                  type: 'orphaned_expense_category',
+                  expense,
+                  issue: `Category '${expense.category}' not found`
+                });
+              }
+              
+              if (!walletIds.has(expense.walletId)) {
+                issues.push({
+                  type: 'orphaned_expense_wallet',
+                  expense,
+                  issue: `Wallet '${expense.walletId}' not found`
+                });
+              }
+              
+              // Check for missing required fields
+              if (!expense.last_modified) {
+                issues.push({
+                  type: 'missing_metadata',
+                  expense,
+                  issue: 'Missing last_modified timestamp'
+                });
+              }
+            });
+            
+            db.close();
+            resolve(issues);
+          });
+        } catch (error) {
+          db.close();
+          reject(error);
+        }
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  }
+};
+
 // Export the database utilities
 export {
   initializeDatabase,
@@ -1362,5 +1722,6 @@ export {
   walletDB,
   recurringDB,
   budgetDB,
-  transferDB
+  transferDB,
+  cleanupUtils
 }; 

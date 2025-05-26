@@ -25,8 +25,28 @@ export const initializeSupabaseDatabase = async () => {
 
 // Expense operations with user_id for data isolation
 export const expenseDB = {
-  // Get all expenses for current user
+  // Get all active expenses for current user (excluding deleted)
   getAll: async (userId) => {
+    if (!userId) return [];
+    
+    try {
+      const { data, error } = await supabase
+        .from('expenses')
+        .select('*')
+        .eq('user_id', userId)
+        .is('deleted_at', null)
+        .order('date', { ascending: false });
+        
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error('Error getting expenses:', error);
+      return [];
+    }
+  },
+  
+  // Get all expenses including deleted (for sync purposes)
+  getAllIncludingDeleted: async (userId) => {
     if (!userId) return [];
     
     try {
@@ -39,7 +59,7 @@ export const expenseDB = {
       if (error) throw error;
       return data || [];
     } catch (error) {
-      console.error('Error getting expenses:', error);
+      console.error('Error getting all expenses:', error);
       return [];
     }
   },
@@ -60,7 +80,10 @@ export const expenseDB = {
         notes: expense.notes || '',
         tags: expense.tags.map(tag => typeof tag === 'object' ? tag.id : tag) || [],
         is_income: expense.is_income,
-        photo_url: expense.photoUrl || null
+        photo_url: expense.photoUrl || null,
+        deleted_at: null,
+        last_modified: new Date().toISOString(),
+        sync_status: 'synced'
       };
       
       console.log('Adding expense with data:', expenseData);
@@ -95,13 +118,16 @@ export const expenseDB = {
         notes: expense.notes || '',
         tags: expense.tags.map(tag => typeof tag === 'object' ? tag.id : tag) || [],
         is_income: expense.is_income,
-        photo_url: expense.photoUrl || null
+        photo_url: expense.photoUrl || null,
+        last_modified: new Date().toISOString(),
+        sync_status: 'synced'
       };
       
       const { data, error } = await supabase
         .from('expenses')
         .update(expenseData)
         .eq('id', expense.id)
+        .eq('user_id', userId)
         .select()
         .single();
         
@@ -113,7 +139,7 @@ export const expenseDB = {
     }
   },
   
-  // Delete an expense
+  // Soft delete an expense (tombstone pattern)
   delete: async (id, userId) => {
     if (!userId) throw new Error('User not authenticated');
     
@@ -129,6 +155,30 @@ export const expenseDB = {
       if (fetchError && fetchError.code !== 'PGRST116') throw fetchError; // PGRST116 is "row not found"
       if (!existingExpense) throw new Error('Expense not found or unauthorized');
       
+      // Mark as deleted instead of removing
+      const { error } = await supabase
+        .from('expenses')
+        .update({ 
+          deleted_at: new Date().toISOString(),
+          last_modified: new Date().toISOString(),
+          sync_status: 'synced'
+        })
+        .eq('id', id)
+        .eq('user_id', userId);
+        
+      if (error) throw error;
+      return id;
+    } catch (error) {
+      console.error('Error soft deleting expense:', error);
+      throw error;
+    }
+  },
+  
+  // Hard delete an expense (for cleanup purposes)
+  hardDelete: async (id, userId) => {
+    if (!userId) throw new Error('User not authenticated');
+    
+    try {
       const { error } = await supabase
         .from('expenses')
         .delete()
@@ -138,7 +188,32 @@ export const expenseDB = {
       if (error) throw error;
       return id;
     } catch (error) {
-      console.error('Error deleting expense:', error);
+      console.error('Error hard deleting expense:', error);
+      throw error;
+    }
+  },
+  
+  // Restore a deleted expense
+  restore: async (id, userId) => {
+    if (!userId) throw new Error('User not authenticated');
+    
+    try {
+      const { data, error } = await supabase
+        .from('expenses')
+        .update({ 
+          deleted_at: null,
+          last_modified: new Date().toISOString(),
+          sync_status: 'synced'
+        })
+        .eq('id', id)
+        .eq('user_id', userId)
+        .select()
+        .single();
+        
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      console.error('Error restoring expense:', error);
       throw error;
     }
   }
