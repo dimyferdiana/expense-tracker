@@ -6,6 +6,7 @@ import DateRangePicker from './DateRangePicker';
 import Badge from './Badge';
 import { getColorName } from '../utils/colors';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../hooks/useNotification';
 
 function CategoryModal({ open, onClose, onSave }) {
   const [input, setInput] = useState('');
@@ -53,6 +54,7 @@ function CategoryModal({ open, onClose, onSave }) {
 
 function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
   const { user } = useAuth();
+  const { showError, showWarning } = useNotification();
   // Get current date and time for default values
   const now = new Date();
   const currentDate = now.toISOString().slice(0, 10); // YYYY-MM-DD
@@ -154,7 +156,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
             }
           } else {
             console.error('No wallets found in database');
-            alert('Please add a wallet before adding transactions');
+            showWarning('Please add a wallet before adding transactions');
           }
         } else {
           // Fallback to localStorage
@@ -221,13 +223,13 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
     
     // Check file type is image
     if (!file.type.startsWith('image/')) {
-      alert('Please select an image file');
+      showError('Please select an image file');
       return;
     }
     
     // Check file size is less than 5MB
     if (file.size > 5 * 1024 * 1024) {
-      alert('File size should be less than 5MB');
+      showError('File size should be less than 5MB');
       return;
     }
     
@@ -365,7 +367,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
         }
         setShowCategoryModal(false);
       } else {
-        alert(`Failed to add category: ${error.message}`);
+        showError(`Failed to add category: ${error.message}`);
       }
     }
   };

@@ -2,6 +2,7 @@ import React, { useState, forwardRef, useImperativeHandle, useEffect } from 'rea
 import Badge from './Badge';
 import { tagDB as supabaseTagDB } from '../utils/supabase-db';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../hooks/useNotification';
 
 const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChange, dbInitialized = false, id }, ref) => {
   const { user } = useAuth();
@@ -9,6 +10,7 @@ const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChang
   const [isAddTagModalOpen, setIsAddTagModalOpen] = useState(false);
   const [newTagName, setNewTagName] = useState('');
   const [temporaryTags, setTemporaryTags] = useState([]);
+  const { showWarning } = useNotification();
   
   // Expose functions to parent component
   useImperativeHandle(ref, () => ({
@@ -133,7 +135,7 @@ const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChang
       // Fall back to temporary tags
       setTemporaryTags(prev => [...prev, newTag]);
       handleTagSelect(newTag);
-      alert(`Tag saved locally only: ${error.message}`);
+      showWarning(`Tag saved locally only: ${error.message}`);
     }
     
     // Reset form

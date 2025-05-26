@@ -1,320 +1,166 @@
 import React, { useState, useEffect } from 'react';
-import { createSyncManager, SyncUtils } from '../utils/syncManager';
+import { getGlobalSyncManager, useSyncManager } from '../utils/syncManager';
 import { useAuth } from '../contexts/AuthContext';
 
 const SyncStatus = ({ className = '' }) => {
   const { user } = useAuth();
-  const [syncManager, setSyncManager] = useState(null);
   const [syncStatus, setSyncStatus] = useState(null);
-  const [showSyncMenu, setShowSyncMenu] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [lastSyncResult, setLastSyncResult] = useState(null);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+  const [syncError, setSyncError] = useState(null);
 
-  // Configuration flag to show/hide individual sync options
-  const SYNC_CONFIG = {
-    showUploadToCloud: false,    // Set to false to hide Upload to Cloud
-    showDownloadFromCloud: false, // Set to false to hide Download from Cloud
-    showFullSync: true,          // Keep Full Sync visible
-    showExportImport: true,      // Keep Export/Import visible
-    showResetDatabase: true      // Keep Reset Database visible
-  };
-
+  // Listen for online/offline events
   useEffect(() => {
-    if (user) {
-      const manager = createSyncManager(user);
-      setSyncManager(manager);
-      
-      // Update status periodically
-      const updateStatus = () => {
-        setSyncStatus(manager.getSyncStatus());
-      };
-      
-      updateStatus();
-      const interval = setInterval(updateStatus, 30000); // Update every 30s
-      
-      return () => clearInterval(interval);
-    }
-  }, [user]);
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
 
-  const handleSync = async (direction = 'bidirectional') => {
-    if (!syncManager) return;
-    
-    setIsLoading(true);
-    setLastSyncResult(null);
-    
-    try {
-      const result = await syncManager.fullSync(direction);
-      setSyncStatus(syncManager.getSyncStatus());
-      setLastSyncResult(result);
-      
-      // Show success message
-      const totalOps = Object.values(result.stats).reduce((sum, stat) => {
-        return sum + (stat.uploaded || 0) + (stat.downloaded || 0);
-      }, 0);
-      
-      if (totalOps > 0) {
-        alert(`Sync completed! ${totalOps} items synced.`);
-      } else {
-        alert('Sync completed! Everything is up to date.');
-      }
-    } catch (error) {
-      console.error('Sync failed:', error);
-      setSyncStatus(syncManager.getSyncStatus());
-      
-      // Check if it's a database error
-      if (error.message.includes('database') || error.message.includes('IDBDatabase') || error.message.includes('object store')) {
-        const resetDb = window.confirm(`Sync failed due to database issues: ${error.message}\n\nWould you like to reset the local database? This will clear all local data and re-download from the cloud.`);
-        if (resetDb) {
-          await handleDatabaseReset();
-        }
-      } else {
-        alert(`Sync failed: ${error.message}`);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
 
-  const handleDatabaseReset = async () => {
-    if (!syncManager) return;
-    
-    setIsLoading(true);
-    
-    try {
-      // Import database utilities
-      const { resetDatabase } = await import('../utils/db');
-      
-      // Reset the local database
-      const resetSuccessful = await resetDatabase();
-      
-      if (resetSuccessful) {
-        alert('Database reset successful! The page will reload to refresh the data.');
-        window.location.reload();
-      } else {
-        alert('Database reset failed. Please try refreshing the page.');
-      }
-    } catch (error) {
-      console.error('Database reset failed:', error);
-      alert(`Database reset failed: ${error.message}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
-  const handleExport = async () => {
-    if (!syncManager) return;
-    
-    setIsLoading(true);
-    
-    try {
-      const data = await syncManager.exportLocalData();
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `expense-tracker-backup-${new Date().toISOString().split('T')[0]}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      
-      alert(`Backup exported successfully! ${data.metadata.totalExpenses} expenses, ${data.metadata.totalWallets} wallets, and more.`);
-    } catch (error) {
-      console.error('Export failed:', error);
-      alert(`Export failed: ${error.message}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleImport = (event) => {
-    const file = event.target.files[0];
-    if (!file || !syncManager) return;
-
-    setIsLoading(true);
-    
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const data = JSON.parse(e.target.result);
-        
-        if (window.confirm('This will replace all local data with the backup. Are you sure? This cannot be undone.')) {
-          const result = await syncManager.importLocalData(data);
-          setSyncStatus(syncManager.getSyncStatus());
-          
-          const totalImported = Object.values(result.stats).reduce((sum, stat) => {
-            return sum + (stat.imported || 0);
-          }, 0);
-          
-          alert(`Data imported successfully! ${totalImported} items restored.`);
-          
-          // Refresh the page to reload all data
-          window.location.reload();
-        }
-      } catch (error) {
-        console.error('Import failed:', error);
-        alert(`Import failed: ${error.message}`);
-      } finally {
-        setIsLoading(false);
-        // Clear the file input
-        event.target.value = '';
+  // Get sync status from sync manager
+  useEffect(() => {
+    const updateSyncStatus = () => {
+      const syncManager = getGlobalSyncManager();
+      if (syncManager) {
+        const status = syncManager.getSyncStatus();
+        setSyncStatus(status);
+        setIsSyncing(status.inProgress);
+        setLastSync(status.lastSync);
+        setSyncError(status.errors.length > 0 ? status.errors[status.errors.length - 1] : null);
       }
     };
-    reader.readAsText(file);
+
+    // Update immediately
+    updateSyncStatus();
+
+    // Update every 5 seconds
+    const interval = setInterval(updateSyncStatus, 5000);
+
+    return () => clearInterval(interval);
+  }, [user]);
+
+  // Manual sync trigger
+  const handleManualSync = async () => {
+    if (!user || isSyncing || !isOnline) return;
+
+    const syncManager = getGlobalSyncManager();
+    if (!syncManager) return;
+
+    setIsSyncing(true);
+    setSyncError(null);
+
+    try {
+      await syncManager.fullSync('bidirectional');
+      console.log('Manual sync completed successfully');
+    } catch (error) {
+      console.error('Manual sync failed:', error);
+      setSyncError({ message: error.message, timestamp: new Date().toISOString() });
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
-  if (!user || !syncStatus) return null;
+  // Format last sync time
+  const formatLastSync = (timestamp) => {
+    if (!timestamp) return 'Never';
+    
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
 
-  const isInProgress = syncStatus.inProgress || isLoading;
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return `${diffDays}d ago`;
+  };
+
+  // Get status icon and color
+  const getStatusDisplay = () => {
+    if (!isOnline) {
+      return {
+        icon: '📴',
+        color: 'text-gray-500',
+        bgColor: 'bg-gray-100',
+        text: 'Offline'
+      };
+    }
+
+    if (isSyncing) {
+      return {
+        icon: '🔄',
+        color: 'text-blue-600',
+        bgColor: 'bg-blue-100',
+        text: 'Syncing...'
+      };
+    }
+
+    if (syncError) {
+      return {
+        icon: '⚠️',
+        color: 'text-red-600',
+        bgColor: 'bg-red-100',
+        text: 'Sync Error'
+      };
+    }
+
+    if (syncStatus?.hasLocalChanges) {
+      return {
+        icon: '📤',
+        color: 'text-yellow-600',
+        bgColor: 'bg-yellow-100',
+        text: 'Pending'
+      };
+    }
+
+    return {
+      icon: '✅',
+      color: 'text-green-600',
+      bgColor: 'bg-green-100',
+      text: 'Synced'
+    };
+  };
+
+  const statusDisplay = getStatusDisplay();
 
   return (
-    <div className={`relative ${className}`}>
-      <button
-        onClick={() => setShowSyncMenu(!showSyncMenu)}
-        disabled={isInProgress}
-        className="flex items-center space-x-2 px-3 py-2 rounded-md text-gray-300 hover:bg-gray-800 hover:text-white transition-colors duration-200 text-sm disabled:opacity-50"
+    <div className={`flex items-center space-x-2 ${className}`}>
+      {/* Status Indicator */}
+      <div 
+        className={`flex items-center space-x-1 px-2 py-1 rounded-full text-xs font-medium ${statusDisplay.color} ${statusDisplay.bgColor}`}
+        title={`Last sync: ${formatLastSync(lastSync)}`}
       >
-        <span className={`text-lg ${isInProgress ? 'animate-spin' : ''}`}>
-          {isInProgress ? '🔄' : SyncUtils.getSyncIcon(syncStatus)}
-        </span>
-        <span className="hidden md:block">
-          {isInProgress ? 'Syncing...' : SyncUtils.formatSyncStatus(syncStatus)}
-        </span>
-      </button>
+        <span className={isSyncing ? 'animate-spin' : ''}>{statusDisplay.icon}</span>
+        <span className="hidden sm:inline">{statusDisplay.text}</span>
+      </div>
 
-      {showSyncMenu && (
-        <div className="absolute right-0 mt-2 w-64 bg-gray-800 border border-gray-700 rounded-md shadow-lg py-2 z-50">
-          <div className="px-4 py-2 border-b border-gray-700">
-            <p className="text-sm font-medium text-white">Sync Status</p>
-            <p className="text-xs text-gray-400">
-              {isInProgress ? 'Syncing...' : SyncUtils.formatSyncStatus(syncStatus)}
-            </p>
-            {syncStatus.lastSync && (
-              <p className="text-xs text-gray-500 mt-1">
-                Last sync: {SyncUtils.formatLastSync(syncStatus.lastSync)}
-              </p>
-            )}
-            {syncStatus.errors.length > 0 && (
-              <p className="text-xs text-red-400 mt-1">
-                {syncStatus.errors.length} error(s)
-              </p>
-            )}
-          </div>
-          
-          {SYNC_CONFIG.showFullSync && (
-            <button
-              onClick={() => handleSync('bidirectional')}
-              disabled={isInProgress || !syncStatus.isOnline}
-              className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center disabled:opacity-50"
-            >
-              <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Full Sync
-              {!syncStatus.isOnline && <span className="ml-auto text-xs">(Offline)</span>}
-            </button>
-          )}
-
-          {SYNC_CONFIG.showUploadToCloud && (
-            <button
-              onClick={() => handleSync('upload')}
-              disabled={isInProgress || !syncStatus.isOnline}
-              className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center disabled:opacity-50"
-            >
-              <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-              Upload to Cloud
-              {!syncStatus.isOnline && <span className="ml-auto text-xs">(Offline)</span>}
-            </button>
-          )}
-
-          {SYNC_CONFIG.showDownloadFromCloud && (
-            <button
-              onClick={() => handleSync('download')}
-              disabled={isInProgress || !syncStatus.isOnline}
-              className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center disabled:opacity-50"
-            >
-              <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              Download from Cloud
-              {!syncStatus.isOnline && <span className="ml-auto text-xs">(Offline)</span>}
-            </button>
-          )}
-
-          <div className="border-t border-gray-700 mt-2 pt-2">
-            {SYNC_CONFIG.showExportImport && (
-              <button
-                onClick={handleExport}
-                disabled={isInProgress}
-                className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center disabled:opacity-50"
-              >
-                <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                Export Backup
-              </button>
-            )}
-
-            {SYNC_CONFIG.showExportImport && (
-              <label className="w-full cursor-pointer">
-                <div className="px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center">
-                  <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                  </svg>
-                  Import Backup
-                </div>
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={handleImport}
-                  disabled={isInProgress}
-                  className="hidden"
-                />
-              </label>
-            )}
-            
-            {SYNC_CONFIG.showResetDatabase && (
-              <div className="border-t border-gray-700 mt-2 pt-2">
-                <button
-                  onClick={() => {
-                    if (window.confirm('Reset local database? This will clear all local data and require a fresh sync. Make sure you have a backup or your data is safely stored in the cloud.')) {
-                      handleDatabaseReset();
-                    }
-                  }}
-                  disabled={isInProgress}
-                  className="w-full text-left px-4 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300 flex items-center disabled:opacity-50"
-                >
-                  <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Reset Database
-                </button>
-              </div>
-            )}
-          </div>
-          
-          {syncStatus.errors.length > 0 && (
-            <div className="border-t border-gray-700 mt-2 pt-2 px-4 py-2">
-              <p className="text-xs text-red-400 mb-1">Recent Errors:</p>
-              {syncStatus.errors.slice(-2).map((error, index) => (
-                <p key={index} className="text-xs text-gray-400 truncate">
-                  {error.message}
-                </p>
-              ))}
-            </div>
-          )}
-        </div>
+      {/* Manual Sync Button */}
+      {isOnline && !isSyncing && (
+        <button
+          onClick={handleManualSync}
+          className="p-1 text-gray-500 hover:text-gray-700 transition-colors"
+          title="Manual sync"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
       )}
-      
-      {/* Click outside to close */}
-      {showSyncMenu && (
-        <div 
-          className="fixed inset-0 z-40" 
-          onClick={() => setShowSyncMenu(false)}
-        />
+
+      {/* Error Details (if any) */}
+      {syncError && (
+        <div className="text-xs text-red-600 max-w-xs truncate" title={syncError.message}>
+          {syncError.message}
+        </div>
       )}
     </div>
   );

@@ -4,6 +4,7 @@ import TagSelector, { TagSelectorWithLabel } from './TagSelector';
 import { categoryDB as supabaseCategoryDB, tagDB as supabaseTagDB, walletDB as supabaseWalletDB } from '../utils/supabase-db';
 import DateRangePicker from './DateRangePicker';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../hooks/useNotification';
 
 function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose }) {
   const { user } = useAuth();
@@ -57,6 +58,8 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
 
   // Add state for date picker
   const [activeDatePicker, setActiveDatePicker] = useState(null); // 'start', 'end', or null
+
+  const { showError, showWarning } = useNotification();
 
   // Load categories and tags
   useEffect(() => {
@@ -229,7 +232,7 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
     
     // Simple validation
     if (!formData.name.trim() || !formData.amount || isNaN(formData.amount)) {
-      alert('Please enter valid details');
+      showWarning('Please enter valid details');
       return;
     }
     
@@ -272,7 +275,7 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
       });
       
     } catch (error) {
-      alert('An error occurred when saving the recurring transaction. Please try again.');
+      showError('An error occurred when saving the recurring transaction. Please try again.');
       console.error('Error saving recurring transaction:', error);
     }
   };

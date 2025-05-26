@@ -6,9 +6,11 @@ import DateRangePicker from './DateRangePicker';
 import Badge from './Badge';
 import { getColorName } from '../utils/colors';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../hooks/useNotification';
 
 function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized = false }) {
   const { user } = useAuth();
+  const { showError, showWarning } = useNotification();
   
   const [formData, setFormData] = useState({
     id: expense.id,
@@ -180,13 +182,13 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
     
     // Check file type is image
     if (!file.type.startsWith('image/')) {
-      alert('Please select an image file');
+      showWarning('Please select an image file');
       return;
     }
     
     // Check file size is less than 5MB
     if (file.size > 5 * 1024 * 1024) {
-      alert('File size should be less than 5MB');
+      showWarning('File size should be less than 5MB');
       return;
     }
     
@@ -250,8 +252,7 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
       setNewCategoryName('');
       setShowNewCategoryInput(false);
     } catch (error) {
-      console.error('Error adding new category:', error);
-      alert('Failed to add new category.');
+      showError('Failed to add new category.');
     }
   };
 
@@ -297,8 +298,7 @@ function ExpenseEditModal({ expense, onSave, onCancel, onDelete, dbInitialized =
       // Close modal after saving
       onCancel();
     } catch (error) {
-      console.error("Error updating expense:", error);
-      alert("There was a problem saving your expense. Please try again.");
+      showError('There was a problem saving your expense. Please try again.');
     } finally {
       setIsSubmitting(false);
     }

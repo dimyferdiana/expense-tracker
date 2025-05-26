@@ -299,10 +299,10 @@ export class SyncManager {
    */
   async uploadDataType(typeName, localDB, remoteDB, stats) {
     try {
-      // First test if local database is accessible
+      // Use getAllIncludingDeleted for expenses to upload soft deletes
       let localData;
       try {
-        localData = await localDB.getAll();
+        localData = typeName === 'expenses' ? await localDB.getAllIncludingDeleted() : await localDB.getAll();
       } catch (dbError) {
         console.error(`Error accessing local ${typeName} database:`, dbError);
         stats[typeName].errors++;
@@ -342,10 +342,12 @@ export class SyncManager {
    */
   async downloadDataType(typeName, remoteDB, localDB, stats) {
     try {
-      // Get remote data first
+      // Get remote data first - use getAllIncludingDeleted for expenses
       let remoteData;
       try {
-        remoteData = await remoteDB.getAll(this.user.id);
+        remoteData = typeName === 'expenses' ? 
+          await remoteDB.getAllIncludingDeleted(this.user.id) : 
+          await remoteDB.getAll(this.user.id);
       } catch (remoteError) {
         console.error(`Error accessing remote ${typeName} database:`, remoteError);
         stats[typeName].errors++;
@@ -361,11 +363,19 @@ export class SyncManager {
         return; // Skip this data type if local database is not accessible
       }
       
-      // Clear local data first
+      // For expenses, clear all data including deleted items
       try {
-        const localData = await localDB.getAll();
+        const localData = typeName === 'expenses' ? 
+          await localDB.getAllIncludingDeleted() : 
+          await localDB.getAll();
+        
         for (const item of localData) {
-          await localDB.delete(item.id);
+          // Use hard delete for complete replacement
+          if (typeName === 'expenses' && localDB.hardDelete) {
+            await localDB.hardDelete(item.id);
+          } else {
+            await localDB.delete(item.id);
+          }
         }
       } catch (clearError) {
         console.error(`Error clearing local ${typeName} data:`, clearError);
@@ -396,9 +406,10 @@ export class SyncManager {
     const conflicts = [];
     
     try {
+      // Use getAllIncludingDeleted for expenses to handle soft deletes properly
       const [localData, remoteData] = await Promise.all([
-        localDB.getAll(),
-        remoteDB.getAll(this.user.id)
+        typeName === 'expenses' ? localDB.getAllIncludingDeleted() : localDB.getAll(),
+        typeName === 'expenses' ? remoteDB.getAllIncludingDeleted(this.user.id) : remoteDB.getAll(this.user.id)
       ]);
 
       // Create maps for easier comparison
@@ -410,10 +421,33 @@ export class SyncManager {
         if (!remoteMap.has(id)) {
           try {
             const transformedItem = this.transformForSupabase(typeName, localItem);
-            await remoteDB.add(transformedItem, this.user.id);
+            
+            // For expenses, use update method if item has deleted_at (soft delete)
+            if (typeName === 'expenses' && localItem.deleted_at) {
+              // Try to update first (item might exist but not in our query due to timing)
+              try {
+                await remoteDB.update(transformedItem, this.user.id);
+              } catch (updateError) {
+                // If update fails, try add
+                await remoteDB.add(transformedItem, this.user.id);
+              }
+            } else {
+              await remoteDB.add(transformedItem, this.user.id);
+            }
             stats.uploaded++;
           } catch (error) {
-            console.error(`Error uploading new ${typeName}:`, error);
+            // Handle duplicate key errors gracefully
+            if (error.message.includes('duplicate') || error.code === '23505') {
+              try {
+                const transformedItem = this.transformForSupabase(typeName, localItem);
+                await remoteDB.update(transformedItem, this.user.id);
+                stats.uploaded++;
+              } catch (updateError) {
+                console.error(`Error updating ${typeName} during upload:`, updateError);
+              }
+            } else {
+              console.error(`Error uploading new ${typeName}:`, error);
+            }
           }
         }
       }
@@ -435,20 +469,29 @@ export class SyncManager {
       for (const [id, localItem] of localMap) {
         const remoteItem = remoteMap.get(id);
         if (remoteItem) {
-          const hasConflict = this.detectConflict(typeName, localItem, remoteItem);
-          if (hasConflict) {
-            // For now, prefer remote version (server wins)
+          const conflictResult = this.resolveConflict(typeName, localItem, remoteItem);
+          
+          if (conflictResult.hasConflict) {
             try {
-              const transformedItem = this.transformFromSupabase(typeName, remoteItem);
-              await localDB.update(transformedItem);
-              stats.downloaded++;
+              if (conflictResult.resolution === 'use_local') {
+                // Upload local version to remote
+                const transformedItem = this.transformForSupabase(typeName, localItem);
+                await remoteDB.update(transformedItem, this.user.id);
+                stats.uploaded++;
+              } else if (conflictResult.resolution === 'use_remote') {
+                // Download remote version to local
+                const transformedItem = this.transformFromSupabase(typeName, remoteItem);
+                await localDB.update(transformedItem);
+                stats.downloaded++;
+              }
               
               conflicts.push({
                 id,
                 type: typeName,
                 localVersion: localItem,
                 remoteVersion: remoteItem,
-                resolution: 'remote_wins'
+                resolution: conflictResult.resolution,
+                reason: conflictResult.reason
               });
             } catch (error) {
               console.error(`Error resolving conflict for ${typeName}:`, error);
@@ -462,6 +505,124 @@ export class SyncManager {
     }
 
     return { conflicts };
+  }
+
+  /**
+   * Intelligent conflict resolution based on timestamps and deletion status
+   */
+  resolveConflict(typeName, localItem, remoteItem) {
+    // Check if there's actually a conflict
+    if (!this.detectConflict(typeName, localItem, remoteItem)) {
+      return { hasConflict: false };
+    }
+
+    // Special handling for deletion conflicts
+    const localDeleted = localItem.deleted_at !== null && localItem.deleted_at !== undefined;
+    const remoteDeleted = remoteItem.deleted_at !== null && remoteItem.deleted_at !== undefined;
+
+    // Case 1: One is deleted, other is not
+    if (localDeleted && !remoteDeleted) {
+      // Compare deletion time with remote modification time
+      const localDeleteTime = new Date(localItem.deleted_at);
+      const remoteModifyTime = new Date(remoteItem.last_modified || remoteItem.updated_at || remoteItem.created_at);
+      
+      if (localDeleteTime > remoteModifyTime) {
+        return {
+          hasConflict: true,
+          resolution: 'use_local',
+          reason: 'Local deletion is newer than remote modification'
+        };
+      } else {
+        return {
+          hasConflict: true,
+          resolution: 'use_remote',
+          reason: 'Remote modification is newer than local deletion'
+        };
+      }
+    }
+
+    if (remoteDeleted && !localDeleted) {
+      // Compare remote deletion time with local modification time
+      const remoteDeleteTime = new Date(remoteItem.deleted_at);
+      const localModifyTime = new Date(localItem.last_modified || localItem.updated_at || localItem.created_at);
+      
+      if (remoteDeleteTime > localModifyTime) {
+        return {
+          hasConflict: true,
+          resolution: 'use_remote',
+          reason: 'Remote deletion is newer than local modification'
+        };
+      } else {
+        return {
+          hasConflict: true,
+          resolution: 'use_local',
+          reason: 'Local modification is newer than remote deletion'
+        };
+      }
+    }
+
+    // Case 2: Both deleted - use the later deletion
+    if (localDeleted && remoteDeleted) {
+      const localDeleteTime = new Date(localItem.deleted_at);
+      const remoteDeleteTime = new Date(remoteItem.deleted_at);
+      
+      return {
+        hasConflict: true,
+        resolution: localDeleteTime > remoteDeleteTime ? 'use_local' : 'use_remote',
+        reason: 'Using later deletion timestamp'
+      };
+    }
+
+    // Case 3: Neither deleted - use timestamp-based resolution
+    const localModifyTime = new Date(localItem.last_modified || localItem.updated_at || localItem.created_at);
+    const remoteModifyTime = new Date(remoteItem.last_modified || remoteItem.updated_at || remoteItem.created_at);
+
+    if (localModifyTime > remoteModifyTime) {
+      return {
+        hasConflict: true,
+        resolution: 'use_local',
+        reason: 'Local version is newer'
+      };
+    } else if (remoteModifyTime > localModifyTime) {
+      return {
+        hasConflict: true,
+        resolution: 'use_remote',
+        reason: 'Remote version is newer'
+      };
+    } else {
+      // Same timestamp - prefer remote (server wins as tiebreaker)
+      return {
+        hasConflict: true,
+        resolution: 'use_remote',
+        reason: 'Same timestamp - server wins tiebreaker'
+      };
+    }
+  }
+
+  /**
+   * Detect conflicts between local and remote versions
+   */
+  detectConflict(typeName, localItem, remoteItem) {
+    // Simple conflict detection based on content comparison
+    // Exclude timestamps and user_id from comparison
+    const localCopy = { ...localItem };
+    const remoteCopy = { ...remoteItem };
+    
+    // Remove metadata fields that shouldn't affect conflict detection
+    delete localCopy.created_at;
+    delete localCopy.updated_at;
+    delete localCopy.last_modified;
+    delete localCopy.sync_status;
+    delete remoteCopy.created_at;
+    delete remoteCopy.updated_at;
+    delete remoteCopy.last_modified;
+    delete remoteCopy.sync_status;
+    delete remoteCopy.user_id;
+
+    // Transform remote item for fair comparison
+    const transformedRemote = this.transformFromSupabase(typeName, remoteCopy);
+    
+    return JSON.stringify(localCopy) !== JSON.stringify(transformedRemote);
   }
 
   /**
@@ -567,28 +728,6 @@ export class SyncManager {
     }
 
     return transformed;
-  }
-
-  /**
-   * Detect conflicts between local and remote versions
-   */
-  detectConflict(typeName, localItem, remoteItem) {
-    // Simple conflict detection based on content comparison
-    // Exclude timestamps and user_id from comparison
-    const localCopy = { ...localItem };
-    const remoteCopy = { ...remoteItem };
-    
-    // Remove metadata fields
-    delete localCopy.created_at;
-    delete localCopy.updated_at;
-    delete remoteCopy.created_at;
-    delete remoteCopy.updated_at;
-    delete remoteCopy.user_id;
-
-    // Transform remote item for fair comparison
-    const transformedRemote = this.transformFromSupabase(typeName, remoteCopy);
-    
-    return JSON.stringify(localCopy) !== JSON.stringify(transformedRemote);
   }
 
   /**

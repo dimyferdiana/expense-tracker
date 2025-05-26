@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+import { useNotification } from '../hooks/useNotification';
 
 const SupabaseSetupPrompt = ({ error, onClose }) => {
   const [showSqlScript, setShowSqlScript] = useState(false);
+  const { showSuccess } = useNotification();
   
   // The SQL script from MIGRATION-GUIDE.md
   const sqlScript = `-- Create expenses table
@@ -113,6 +115,11 @@ CREATE POLICY "Users can insert their own budgets" ON budgets FOR INSERT WITH CH
 CREATE POLICY "Users can update their own budgets" ON budgets FOR UPDATE USING (auth.uid() = user_id);
 CREATE POLICY "Users can delete their own budgets" ON budgets FOR DELETE USING (auth.uid() = user_id);`;
 
+  const handleCopy = () => {
+    navigator.clipboard.writeText(sqlScript);
+    showSuccess('SQL Script copied to clipboard!');
+  };
+
   return (
     <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 p-4">
       <div className="bg-gray-800 rounded-lg shadow-lg max-w-xl w-full p-6 border border-gray-700">
@@ -160,10 +167,7 @@ CREATE POLICY "Users can delete their own budgets" ON budgets FOR DELETE USING (
                 {sqlScript}
               </pre>
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(sqlScript);
-                  alert('SQL Script copied to clipboard!');
-                }}
+                onClick={handleCopy}
                 className="mt-2 bg-gray-700 text-gray-300 py-1 px-3 rounded text-sm hover:bg-gray-600"
               >
                 Copy to Clipboard

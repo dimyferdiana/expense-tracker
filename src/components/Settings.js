@@ -6,6 +6,45 @@ import {
 import Badge from './Badge';
 import { colorClasses, getColorClasses, getColorName, availableColors } from '../utils/colors';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../hooks/useNotification';
+
+function ConfirmationModal({ open, onClose, onConfirm, title, message }) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+      <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4">
+        <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+          <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+          </svg>
+        </div>
+        <h3 className="text-lg font-semibold text-white mb-2 text-center">
+          {title}
+        </h3>
+        <p className="text-gray-300 mb-6 text-center">
+          {message}
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-500 transition-colors"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+            onClick={onConfirm}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function CategoryModal({ open, onClose, onSave, category = null }) {
   const [name, setName] = useState('');
@@ -203,6 +242,7 @@ function TagModal({ open, onClose, onSave, tag = null }) {
 
 function Settings({ dbInitialized = false }) {
   const { user } = useAuth();
+  const { showError, showSuccess, showWarning, showInfo } = useNotification();
   const [activeTab, setActiveTab] = useState('categories');
   const [categories, setCategories] = useState([]);
   const [tags, setTags] = useState([]);
@@ -214,6 +254,12 @@ function Settings({ dbInitialized = false }) {
   const [showTagModal, setShowTagModal] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
   const [editingTag, setEditingTag] = useState(null);
+  
+  // Confirmation modal states
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
 
   // Load categories and tags
   const loadData = async () => {
@@ -302,12 +348,7 @@ function Settings({ dbInitialized = false }) {
         const updatedCategory = {
           ...editingCategory,
           name: categoryData.name,
-        };
-        
-        // Only include color for localStorage
-        const localCategory = {
-          ...updatedCategory,
-          color: categoryData.color
+          color: categoryData.color  // Include color for Supabase
         };
         
         if (dbInitialized && user) {
@@ -315,7 +356,7 @@ function Settings({ dbInitialized = false }) {
         } else {
           // Update in local state and localStorage
           const updatedCategories = categories.map(c => 
-            c.id === editingCategory.id ? localCategory : c
+            c.id === editingCategory.id ? updatedCategory : c
           );
           setCategories(updatedCategories);
           localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
@@ -324,19 +365,19 @@ function Settings({ dbInitialized = false }) {
         // Adding new category
         const newCategory = {
           name: categoryData.name,
+          color: categoryData.color  // Include color for Supabase
         };
         
-        // Only include color for localStorage
+        // For localStorage, we need to include the ID
         const localCategory = {
           id: categoryData.name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
-          ...newCategory,
-          color: categoryData.color
+          ...newCategory
         };
         
         // Check if category with this ID already exists
         const existingCategory = categories.find(c => c.id === localCategory.id);
         if (existingCategory) {
-          alert('A category with this name already exists!');
+          showWarning('A category with this name already exists!');
           return;
         }
         
@@ -356,7 +397,7 @@ function Settings({ dbInitialized = false }) {
       setEditingCategory(null);
     } catch (error) {
       console.error('Error saving category:', error);
-      alert(`Failed to save category: ${error.message}`);
+      showError(`Failed to save category: ${error.message}`);
     }
   };
   
@@ -368,12 +409,7 @@ function Settings({ dbInitialized = false }) {
         const updatedTag = {
           ...editingTag,
           name: tagData.name,
-        };
-        
-        // Only include color for localStorage
-        const localTag = {
-          ...updatedTag,
-          color: tagData.color
+          color: tagData.color  // Include color for Supabase
         };
         
         if (dbInitialized && user) {
@@ -381,7 +417,7 @@ function Settings({ dbInitialized = false }) {
         } else {
           // Update in local state and localStorage
           const updatedTags = tags.map(t => 
-            t.id === editingTag.id ? localTag : t
+            t.id === editingTag.id ? updatedTag : t
           );
           setTags(updatedTags);
           localStorage.setItem('expense-tags', JSON.stringify(updatedTags));
@@ -390,19 +426,19 @@ function Settings({ dbInitialized = false }) {
         // Adding new tag
         const newTag = {
           name: tagData.name,
+          color: tagData.color  // Include color for Supabase
         };
         
-        // Only include color for localStorage
+        // For localStorage, we need to include the ID
         const localTag = {
           id: tagData.name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
-          ...newTag,
-          color: tagData.color
+          ...newTag
         };
         
         // Check if tag with this ID already exists
         const existingTag = tags.find(t => t.id === localTag.id);
         if (existingTag) {
-          alert('A tag with this name already exists!');
+          showWarning('A tag with this name already exists!');
           return;
         }
         
@@ -422,14 +458,21 @@ function Settings({ dbInitialized = false }) {
       setEditingTag(null);
     } catch (error) {
       console.error('Error saving tag:', error);
-      alert(`Failed to save tag: ${error.message}`);
+      showError(`Failed to save tag: ${error.message}`);
     }
   };
   
   // Handle deleting a category
   const handleDeleteCategory = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this category?')) return;
-    
+    const category = categories.find(c => c.id === id);
+    setConfirmTitle('Delete Category');
+    setConfirmMessage(`Are you sure you want to delete the category "${category?.name}"? This action cannot be undone.`);
+    setConfirmAction(() => () => deleteCategory(id));
+    setShowConfirmModal(true);
+  };
+  
+  // Actual category deletion logic
+  const deleteCategory = async (id) => {
     try {
       if (dbInitialized && user) {
         await supabaseCategoryDB.delete(id, user.id);
@@ -440,16 +483,25 @@ function Settings({ dbInitialized = false }) {
         setCategories(updatedCategories);
         localStorage.setItem('expense-categories', JSON.stringify(updatedCategories));
       }
+      setShowConfirmModal(false);
     } catch (error) {
       console.error('Error deleting category:', error);
       setError('Failed to delete category. Please try again.');
+      setShowConfirmModal(false);
     }
   };
   
   // Handle deleting a tag
   const handleDeleteTag = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this tag?')) return;
-    
+    const tag = tags.find(t => t.id === id);
+    setConfirmTitle('Delete Tag');
+    setConfirmMessage(`Are you sure you want to delete the tag "${tag?.name}"? This action cannot be undone.`);
+    setConfirmAction(() => () => deleteTag(id));
+    setShowConfirmModal(true);
+  };
+  
+  // Actual tag deletion logic
+  const deleteTag = async (id) => {
     try {
       if (dbInitialized && user) {
         await supabaseTagDB.delete(id, user.id);
@@ -460,25 +512,32 @@ function Settings({ dbInitialized = false }) {
         setTags(updatedTags);
         localStorage.setItem('expense-tags', JSON.stringify(updatedTags));
       }
+      setShowConfirmModal(false);
     } catch (error) {
       console.error('Error deleting tag:', error);
       setError('Failed to delete tag. Please try again.');
+      setShowConfirmModal(false);
     }
   };
 
   // Handle cleanup duplicates
   const handleCleanupDuplicates = async () => {
     if (!dbInitialized || !user) {
-      alert('Cleanup is only available when using the cloud database.');
+      showWarning('Cleanup is only available when using the cloud database.');
       return;
     }
     
-    if (!window.confirm('This will remove duplicate categories and tags (keeping the oldest version of each). Continue?')) {
-      return;
-    }
-    
+    setConfirmTitle('Cleanup Duplicates');
+    setConfirmMessage('This will remove duplicate categories and tags (keeping the oldest version of each). This action cannot be undone. Continue?');
+    setConfirmAction(() => () => performCleanupDuplicates());
+    setShowConfirmModal(true);
+  };
+  
+  // Actual cleanup logic
+  const performCleanupDuplicates = async () => {
     try {
       setIsLoading(true);
+      setShowConfirmModal(false);
       
       // Cleanup categories
       const categoryResult = await supabaseCategoryDB.cleanupDuplicates(user.id);
@@ -491,13 +550,13 @@ function Settings({ dbInitialized = false }) {
       
       const totalRemoved = categoryResult.duplicatesRemoved + tagResult.duplicatesRemoved;
       if (totalRemoved > 0) {
-        alert(`Cleanup completed! Removed ${totalRemoved} duplicates:\n- Categories: ${categoryResult.duplicatesRemoved}\n- Tags: ${tagResult.duplicatesRemoved}`);
+        showSuccess(`Cleanup completed! Removed ${totalRemoved} duplicates:\n- Categories: ${categoryResult.duplicatesRemoved}\n- Tags: ${tagResult.duplicatesRemoved}`);
       } else {
-        alert('No duplicates found!');
+        showInfo('No duplicates found!');
       }
     } catch (error) {
       console.error('Error cleaning up duplicates:', error);
-      alert(`Failed to cleanup duplicates: ${error.message}`);
+      showError(`Failed to cleanup duplicates: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -701,6 +760,14 @@ function Settings({ dbInitialized = false }) {
         }}
         onSave={handleTagSave}
         tag={editingTag}
+      />
+
+      <ConfirmationModal
+        open={showConfirmModal}
+        onClose={() => setShowConfirmModal(false)}
+        onConfirm={confirmAction}
+        title={confirmTitle}
+        message={confirmMessage}
       />
     </div>
   );
