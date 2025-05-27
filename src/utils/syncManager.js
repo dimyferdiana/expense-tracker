@@ -8,7 +8,8 @@ import {
   tagDB as localTagDB,
   recurringDB as localRecurringDB
 } from './db';
-import { dataIntegrityManager, preSyncValidation } from './dataIntegrity';
+import { DataIntegrityManager, preSyncValidation } from './dataIntegrity';
+import { DuplicateCleanupManager } from './duplicateCleanup';
 import { safeSetItem } from './safeStorage';
 
 import {
@@ -27,6 +28,7 @@ import {
  */
 export class SyncManager {
   constructor(user) {
+    console.log('🛑 AUTOMATIC SYNC DISABLED - SyncManager initialized in manual-only mode');
     this.user = user;
     this.syncStatus = {
       lastSync: this.getLastSyncTime(),
@@ -35,11 +37,14 @@ export class SyncManager {
       errors: [],
       hasLocalChanges: this.hasLocalChanges(),
       isOnline: navigator.onLine,
-      backgroundSyncEnabled: true,
+      backgroundSyncEnabled: false, // DISABLED to prevent automatic sync
       adaptiveInterval: 5 * 60 * 1000, // Start with 5 minutes
       consecutiveFailures: 0,
       lastSuccessfulSync: null
     };
+
+    // Create data integrity manager with proper configuration
+    this.dataIntegrityManager = new DataIntegrityManager(user?.id, true); // Use cloud DB
 
     // Listen for online/offline events
     window.addEventListener('online', this.handleOnlineStatusChange.bind(this));
@@ -48,8 +53,8 @@ export class SyncManager {
     // Initialize local database if needed
     this.initializeLocalDatabase();
 
-    // Set up adaptive background sync
-    this.setupAdaptiveBackgroundSync();
+    // DISABLED: Set up adaptive background sync
+    // this.setupAdaptiveBackgroundSync();
   }
 
   /**
@@ -83,8 +88,8 @@ export class SyncManager {
       this.syncStatus.backgroundSyncEnabled = true;
       this.syncStatus.consecutiveFailures = 0;
       
-      // Restart background sync
-      this.setupAdaptiveBackgroundSync();
+      // DISABLED: Restart background sync
+      // this.setupAdaptiveBackgroundSync();
     } else if (wasOnline && !navigator.onLine) {
       // Just went offline
       console.log('Device went offline - pausing background sync');
@@ -172,7 +177,7 @@ export class SyncManager {
           // Auto-fix integrity issues if enabled
           if (autoFixIntegrity && validationResult.integrity.issues.length > 0) {
             console.log(`Found ${validationResult.integrity.issues.length} integrity issues, attempting auto-fix...`);
-            const fixResult = await dataIntegrityManager.autoFixIntegrityIssues(validationResult.integrity.issues);
+            const fixResult = await this.dataIntegrityManager.autoFixIntegrityIssues(validationResult.integrity.issues);
             result.validation.autoFix = fixResult;
             
             if (fixResult.successful > 0) {
@@ -204,7 +209,7 @@ export class SyncManager {
       if (performMaintenance) {
         console.log('Performing database maintenance...');
         try {
-          result.maintenance = await dataIntegrityManager.performMaintenance({
+          result.maintenance = await this.dataIntegrityManager.performMaintenance({
             cleanupTombstonesOlderThan: 30,
             validateData: true,
             autoFix: autoFixIntegrity
@@ -510,14 +515,14 @@ export class SyncManager {
             } else {
               await remoteDB.add(transformedItem, this.user.id);
             }
-            stats.uploaded++;
+            stats[typeName].uploaded++;
           } catch (error) {
             // Handle duplicate key errors gracefully
             if (error.message.includes('duplicate') || error.code === '23505') {
               try {
                 const transformedItem = this.transformForSupabase(typeName, localItem);
                 await remoteDB.update(transformedItem, this.user.id);
-                stats.uploaded++;
+                stats[typeName].uploaded++;
               } catch (updateError) {
                 console.error(`Error updating ${typeName} during upload:`, updateError);
               }
@@ -529,14 +534,77 @@ export class SyncManager {
       }
 
       // Find items that exist only remotely (need to download)
+      // BUT: Don't download items that are soft-deleted locally (respect local deletions)
       for (const [id, remoteItem] of remoteMap) {
-        if (!localMap.has(id)) {
+        const localItem = localMap.get(id);
+        
+        if (!localItem) {
+          // Item doesn't exist locally at all - check if it was recently cleaned as duplicate
+          if (typeName === 'expenses' && DuplicateCleanupManager.isRecentlyCleanedDuplicate(remoteItem.id)) {
+            console.log(`Skipping download of expense ${remoteItem.id} - recently cleaned as duplicate`);
+            continue;
+          }
+          
+          // Safe to download
           try {
             const transformedItem = this.transformFromSupabase(typeName, remoteItem);
-            await localDB.add(transformedItem);
-            stats.downloaded++;
+            
+            // Use upsert if available, otherwise fallback to add/update pattern
+            if (localDB.upsert && typeName === 'expenses') {
+              await localDB.upsert(transformedItem);
+            } else {
+              // Use update (put) instead of add to handle cases where the item might already exist
+              // This can happen if there are timing issues or partial sync states
+              try {
+                await localDB.add(transformedItem);
+              } catch (addError) {
+                // If add fails (likely due to existing ID), try update instead
+                if (addError.name === 'ConstraintError' || addError.message?.includes('Key already exists')) {
+                  console.log(`Item ${remoteItem.id} already exists locally, updating instead`);
+                  await localDB.update(transformedItem);
+                } else {
+                  throw addError;
+                }
+              }
+            }
+            
+            stats[typeName].downloaded++;
           } catch (error) {
-            console.error(`Error downloading new ${typeName}:`, error);
+            console.error(`Error downloading new ${typeName} (ID: ${remoteItem.id}):`, {
+              error,
+              errorName: error.name,
+              errorMessage: error.message,
+              remoteItem: remoteItem,
+              transformedItem: this.transformFromSupabase(typeName, remoteItem)
+            });
+            stats[typeName].errors = (stats[typeName].errors || 0) + 1;
+          }
+        } else if (localItem.deleted_at && !remoteItem.deleted_at) {
+          // Local item is soft-deleted but remote is not
+          // Check if local deletion is newer than remote modification
+          const localDeleteTime = new Date(localItem.deleted_at);
+          const remoteModifyTime = new Date(remoteItem.last_modified || remoteItem.updated_at || remoteItem.created_at);
+          
+          if (localDeleteTime > remoteModifyTime) {
+            // Local deletion is newer - upload the deletion to remote
+            try {
+              const transformedItem = this.transformForSupabase(typeName, localItem);
+              await remoteDB.update(transformedItem, this.user.id);
+              stats[typeName].uploaded++;
+              console.log(`Synced local deletion to remote for ${typeName} ${id}`);
+            } catch (error) {
+              console.error(`Error syncing deletion to remote for ${typeName}:`, error);
+            }
+          } else {
+            // Remote modification is newer - restore the item locally
+            try {
+              const transformedItem = this.transformFromSupabase(typeName, remoteItem);
+              await localDB.update(transformedItem);
+              stats[typeName].downloaded++;
+              console.log(`Restored ${typeName} ${id} from remote (newer than local deletion)`);
+            } catch (error) {
+              console.error(`Error restoring ${typeName} from remote:`, error);
+            }
           }
         }
       }
@@ -553,12 +621,12 @@ export class SyncManager {
                 // Upload local version to remote
                 const transformedItem = this.transformForSupabase(typeName, localItem);
                 await remoteDB.update(transformedItem, this.user.id);
-                stats.uploaded++;
+                stats[typeName].uploaded++;
               } else if (conflictResult.resolution === 'use_remote') {
                 // Download remote version to local
                 const transformedItem = this.transformFromSupabase(typeName, remoteItem);
                 await localDB.update(transformedItem);
-                stats.downloaded++;
+                stats[typeName].downloaded++;
               }
               
               conflicts.push({
@@ -569,6 +637,7 @@ export class SyncManager {
                 resolution: conflictResult.resolution,
                 reason: conflictResult.reason
               });
+              stats[typeName].conflicts++;
             } catch (error) {
               console.error(`Error resolving conflict for ${typeName}:`, error);
             }
@@ -936,9 +1005,12 @@ export class SyncManager {
   }
 
   /**
-   * Setup adaptive background sync with intelligent intervals
+   * Setup adaptive background sync with intelligent intervals - DISABLED FOR SAFETY
    */
   setupAdaptiveBackgroundSync() {
+    console.warn('🛑 setupAdaptiveBackgroundSync() called but is disabled to prevent automatic sync');
+    console.warn('Use manual sync methods instead');
+    return;
     if (this.backgroundSyncInterval) {
       clearTimeout(this.backgroundSyncInterval);
     }
@@ -996,14 +1068,17 @@ export class SyncManager {
   }
 
   /**
-   * Enable/disable background sync
+   * Enable/disable background sync - DISABLED FOR SAFETY
    */
   setBackgroundSyncEnabled(enabled) {
-    this.syncStatus.backgroundSyncEnabled = enabled;
+    console.warn('🛑 Background sync is permanently disabled to prevent automatic database writes');
+    console.warn('Use manual sync methods instead: forceSync(), uploadToCloud(), downloadFromCloud()');
     
-    if (enabled && navigator.onLine) {
-      this.setupAdaptiveBackgroundSync();
-    } else if (!enabled && this.backgroundSyncInterval) {
+    // Force disabled state
+    this.syncStatus.backgroundSyncEnabled = false;
+    
+    // Clear any existing intervals
+    if (this.backgroundSyncInterval) {
       clearTimeout(this.backgroundSyncInterval);
       this.backgroundSyncInterval = null;
     }
@@ -1022,8 +1097,8 @@ export class SyncManager {
     
     const result = await this.fullSync(direction);
     
-    // Restart background sync with new interval
-    this.setupAdaptiveBackgroundSync();
+    // DISABLED: Restart background sync with new interval
+    // this.setupAdaptiveBackgroundSync();
     
     return result;
   }

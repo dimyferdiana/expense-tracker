@@ -550,6 +550,50 @@ const expenseDB = {
         reject(event.target.error);
       };
     });
+  },
+  
+  // Upsert an expense (insert or update)
+  upsert: (expense) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(EXPENSES_STORE, 'readwrite');
+        const store = transaction.objectStore(EXPENSES_STORE);
+        
+        const now = new Date().toISOString();
+        
+        // Prepare the expense data
+        const expenseData = {
+          ...expense,
+          walletId: expense.walletId || expense.wallet_id || 'cash',
+          isIncome: expense.isIncome !== undefined ? expense.isIncome : (expense.is_income || false),
+          notes: expense.notes || '',
+          photoUrl: expense.photoUrl || expense.photo_url || '',
+          last_modified: now,
+          sync_status: expense.sync_status || 'pending'
+        };
+        
+        // Use put which will insert or update
+        const putRequest = store.put(expenseData);
+        
+        putRequest.onsuccess = () => {
+          resolve(expenseData);
+          db.close();
+        };
+        
+        putRequest.onerror = (error) => {
+          console.error('Upsert error:', error);
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
   }
 };
 
@@ -572,6 +616,34 @@ const categoryDB = {
         };
         
         getAllRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+
+  // Get a category by ID
+  getById: (id) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(CATEGORIES_STORE, 'readonly');
+        const store = transaction.objectStore(CATEGORIES_STORE);
+        const getRequest = store.get(id);
+        
+        getRequest.onsuccess = () => {
+          resolve(getRequest.result);
+          db.close();
+        };
+        
+        getRequest.onerror = (error) => {
           reject(error);
           db.close();
         };
@@ -759,6 +831,35 @@ const tagDB = {
     });
   },
   
+  // Get a tag by ID
+  getById: (id) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(TAGS_STORE, 'readonly');
+        const store = transaction.objectStore(TAGS_STORE);
+        
+        const getRequest = store.get(id);
+        
+        getRequest.onsuccess = () => {
+          resolve(getRequest.result);
+          db.close();
+        };
+        
+        getRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+
   // Delete a tag
   delete: (id) => {
     return new Promise((resolve, reject) => {
@@ -808,6 +909,34 @@ const walletDB = {
           db.close();
         };
       };
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+
+  // Get a wallet by ID
+  getById: (id) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(WALLETS_STORE, 'readonly');
+        const store = transaction.objectStore(WALLETS_STORE);
+        const getRequest = store.get(id);
+        
+        getRequest.onsuccess = () => {
+          resolve(getRequest.result);
+          db.close();
+        };
+        
+        getRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
       request.onerror = (event) => {
         reject(event.target.error);
       };
@@ -1092,6 +1221,34 @@ const budgetDB = {
     });
   },
   
+  // Get a budget by ID
+  getById: (id) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(BUDGET_STORE, 'readonly');
+        const store = transaction.objectStore(BUDGET_STORE);
+        const getRequest = store.get(id);
+        
+        getRequest.onsuccess = () => {
+          resolve(getRequest.result);
+          db.close();
+        };
+        
+        getRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+
   // Get budgets by category
   getByCategory: (category) => {
     return new Promise((resolve, reject) => {
@@ -1232,6 +1389,34 @@ const transferDB = {
         };
         
         getAllRequest.onerror = (error) => {
+          reject(error);
+          db.close();
+        };
+      };
+      
+      request.onerror = (event) => {
+        reject(event.target.error);
+      };
+    });
+  },
+
+  // Get a transfer by ID
+  getById: (id) => {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(TRANSFERS_STORE, 'readonly');
+        const store = transaction.objectStore(TRANSFERS_STORE);
+        const getRequest = store.get(id);
+        
+        getRequest.onsuccess = () => {
+          resolve(getRequest.result);
+          db.close();
+        };
+        
+        getRequest.onerror = (error) => {
           reject(error);
           db.close();
         };

@@ -532,7 +532,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
         
         <form id="expense-form" onSubmit={handleSubmit}>
           <div className="mb-6">
-            <label htmlFor="name" className="block mb-2 font-medium text-gray-300">
+            <label htmlFor="name" className="block mb-2 font-medium text-gray-200">
               {formData.is_income ? 'Income' : 'Expense'} Name
             </label>
             <input
@@ -549,7 +549,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
           </div>
           
           <div className="mb-6">
-            <label htmlFor="amount" className="block mb-2 font-medium text-gray-300">Amount (Rp)</label>
+            <label htmlFor="amount" className="block mb-2 font-medium text-gray-200">Amount (Rp)</label>
             <input
               type="number"
               id="amount"
@@ -567,7 +567,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
           {/* Date and Time fields */}
           <div className="grid grid-cols-2 gap-4 mb-6">
             <div className="relative">
-              <label htmlFor="date" className="block mb-2 font-medium text-gray-300">Date</label>
+              <label htmlFor="date" className="block mb-2 font-medium text-gray-200">Date</label>
               <input
                 type="text"
                 id="date"
@@ -616,7 +616,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
               )}
             </div>
             <div className="relative">
-              <label htmlFor="time" className="block mb-2 font-medium text-gray-300">Time</label>
+              <label htmlFor="time" className="block mb-2 font-medium text-gray-200">Time</label>
               <input
                 type="text"
                 id="time"
@@ -695,7 +695,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
           
           {/* Wallet */}
           <div className="mb-6">
-            <label htmlFor="wallet-select" className="block mb-2 font-medium text-gray-300">Wallet</label>
+            <label htmlFor="wallet-select" className="block mb-2 font-medium text-gray-200">Wallet</label>
             {wallets.length > 0 ? (
               <Combobox
                 id="wallet-select"
@@ -722,7 +722,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
           {/* Category */}
           <div className="mb-6">
             <div className="flex justify-between items-center mb-2">
-              <label htmlFor="category-select" className="font-medium text-gray-300">Category</label>
+              <label htmlFor="category-select" className="font-medium text-gray-200">Category</label>
               {!showNewCategoryInput && (
                 <button
                   type="button"
@@ -788,7 +788,7 @@ function ExpenseForm({ addExpense, dbInitialized = false, onClose, onSubmit }) {
           </div>
           
           <div className="mb-6">
-            <label htmlFor="notes" className="block mb-2 font-medium text-gray-300">Notes (optional)</label>
+            <label htmlFor="notes" className="block mb-2 font-medium text-gray-200">Notes (optional)</label>
             <textarea
               id="notes"
               name="notes"

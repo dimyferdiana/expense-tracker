@@ -180,7 +180,7 @@ function Wallets({ dbInitialized = false, refresh = 0 }) {
       <h2 className="text-xl font-semibold mb-4 text-indigo-300">{editingId ? 'Edit Wallet' : 'Add New Wallet'}</h2>
       <form onSubmit={handleSubmit}>
         <div className="mb-3">
-          <label className="block mb-1 text-gray-300">Name</label>
+          <label className="block mb-1 text-gray-200">Name</label>
           <input
             type="text"
             name="name"
@@ -191,7 +191,7 @@ function Wallets({ dbInitialized = false, refresh = 0 }) {
           />
         </div>
         <div className="mb-3">
-          <ComboboxLabel htmlFor="wallet-type-select" className="block mb-1 text-gray-300">Type</ComboboxLabel>
+          <label htmlFor="wallet-type-select" className="block mb-1 text-gray-200">Type</label>
           <Combobox
             id="wallet-type-select"
             name="type"
@@ -209,7 +209,7 @@ function Wallets({ dbInitialized = false, refresh = 0 }) {
           </Combobox>
         </div>
         <div className="mb-4">
-          <label className="block mb-1 text-gray-300">Balance</label>
+          <label className="block mb-1 text-gray-200">Balance</label>
           <input
             type="number"
             name="balance"

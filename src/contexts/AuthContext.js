@@ -48,6 +48,16 @@ export const AuthProvider = ({ children }) => {
         const authenticatedUser = session?.user ?? null;
         
         if (event === 'SIGNED_OUT') {
+          // Clear duplicate detection flags when user signs out
+          const keysToRemove = [];
+          for (let i = 0; i < sessionStorage.length; i++) {
+            const key = sessionStorage.key(i);
+            if (key && key.startsWith('duplicateDetectionRun_')) {
+              keysToRemove.push(key);
+            }
+          }
+          keysToRemove.forEach(key => sessionStorage.removeItem(key));
+          
           setUser(null);
           initializeGlobalSyncManager(null);
         } else if (event === 'SIGNED_IN') {
@@ -110,6 +120,16 @@ export const AuthProvider = ({ children }) => {
 
   const signOut = async () => {
     try {
+      // Clear duplicate detection flags for all users
+      const keysToRemove = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key && key.startsWith('duplicateDetectionRun_')) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => sessionStorage.removeItem(key));
+      
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
       setUser(null);

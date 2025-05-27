@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import ExpenseEditModal from './ExpenseEditModal';
 import Badge from './Badge';
+import Pagination from './Pagination';
 import { tagDB as supabaseTagDB, categoryDB as supabaseCategoryDB } from '../utils/supabase-db';
 import { getColorName } from '../utils/colors';
 import { useAuth } from '../contexts/AuthContext';
+import usePagination from '../hooks/usePagination';
 
 function ExpenseList({ expenses, deleteExpense, updateExpense, dbInitialized = false }) {
   const [selectedExpense, setSelectedExpense] = useState(null);
@@ -18,7 +20,11 @@ function ExpenseList({ expenses, deleteExpense, updateExpense, dbInitialized = f
     { id: 'healthcare', name: 'Healthcare' },
     { id: 'other', name: 'Other' }
   ]);
+  
   const { user } = useAuth();
+  
+  // Use pagination hook for efficient data handling
+  const pagination = usePagination(expenses, 10, 'expenseList');
 
   // Load all tags and categories
   useEffect(() => {
@@ -112,12 +118,31 @@ function ExpenseList({ expenses, deleteExpense, updateExpense, dbInitialized = f
 
   return (
     <div className="bg-gray-800 p-6 rounded-lg shadow-lg mb-8">
-      <h2 className="text-xl font-semibold mb-4 text-indigo-300">Transaction History</h2>
+      {/* Header */}
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-semibold text-indigo-300">Transaction History</h2>
+      </div>
+
+      {/* Pagination controls at top */}
+      <Pagination
+        currentPage={pagination.currentPage}
+        totalPages={pagination.totalPages}
+        totalItems={pagination.totalItems}
+        itemsPerPage={pagination.itemsPerPage}
+        startIndex={pagination.startIndex}
+        endIndex={pagination.endIndex}
+        onPageChange={pagination.goToPage}
+        onItemsPerPageChange={pagination.changeItemsPerPage}
+        itemsPerPageOptions={[5, 10, 20]}
+        className="mb-6 rounded-lg"
+      />
+
+      {/* Transaction list */}
       <div className="space-y-4">
-        {expenses.map((expense) => (
+        {pagination.currentData.map((expense) => (
           <div
             key={expense.id}
-            className={`p-4 rounded-lg mb-4 ${
+            className={`p-4 rounded-lg mb-4 cursor-pointer transition-all duration-200 hover:bg-gray-600/50 ${
               expense.is_income ? 'bg-gray-700/80 border-l-4 border-green-500' : 'bg-gray-700/80 border-l-4 border-red-500'
             }`}
             onClick={() => handleExpenseClick(expense)}
@@ -172,7 +197,7 @@ function ExpenseList({ expenses, deleteExpense, updateExpense, dbInitialized = f
                 )}
               </div>
               
-              {/* Date and Delete button */}
+              {/* Date */}
               <div className="flex items-center">
                 <div className="text-xs text-gray-500 mr-3">
                   {new Date(expense.date).toLocaleDateString()}
@@ -182,6 +207,22 @@ function ExpenseList({ expenses, deleteExpense, updateExpense, dbInitialized = f
           </div>
         ))}
       </div>
+
+      {/* Pagination controls at bottom */}
+      <Pagination
+        currentPage={pagination.currentPage}
+        totalPages={pagination.totalPages}
+        totalItems={pagination.totalItems}
+        itemsPerPage={pagination.itemsPerPage}
+        startIndex={pagination.startIndex}
+        endIndex={pagination.endIndex}
+        onPageChange={pagination.goToPage}
+        onItemsPerPageChange={pagination.changeItemsPerPage}
+        itemsPerPageOptions={[5, 10, 20]}
+        showItemsPerPage={false} // Hide items per page selector at bottom
+        showJumpToPage={false}   // Hide jump to page at bottom for cleaner look
+        className="mt-6 rounded-lg"
+      />
       
       {/* Edit modal */}
       {isModalOpen && selectedExpense && (

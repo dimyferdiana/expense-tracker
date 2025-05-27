@@ -1,23 +1,76 @@
 import supabase from './supabase';
 
+// Function to handle network errors gracefully
+const handleNetworkError = (error, operation = 'database operation') => {
+  console.error(`Network error during ${operation}:`, error);
+  
+  // Check for specific CORS-related errors
+  if (error.message?.includes('NetworkError') || 
+      error.message?.includes('CORS') || 
+      error.message?.includes('fetch') ||
+      error.message?.includes('Cross-Origin') ||
+      error.code === 'NETWORK_ERROR') {
+    
+    console.warn(`🚨 CORS/Network error detected during ${operation}:`, {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint
+    });
+    
+    return {
+      isNetworkError: true,
+      isCorsError: true,
+      message: 'Network connection issue or CORS error. This might be due to:\n' +
+               '1. Internet connectivity problems\n' +
+               '2. Supabase project configuration issues\n' +
+               '3. Browser blocking the request\n' +
+               '4. Invalid API keys or authentication\n' +
+               'Please check your connection and try again.',
+      troubleshooting: {
+        checkConnection: 'Verify internet connectivity',
+        checkSupabaseStatus: 'Check if Supabase is accessible at https://status.supabase.com',
+        checkApiKeys: 'Verify your Supabase URL and API key are correct',
+        checkBrowser: 'Try in a different browser or incognito mode',
+        checkConsole: 'Check browser console for detailed error messages'
+      },
+      originalError: error
+    };
+  }
+  
+  return { isNetworkError: false, originalError: error };
+};
+
 // Function to create database tables if they don't exist
 export const initializeSupabaseDatabase = async () => {
   try {
     // Check if we can access the database
     const { data, error } = await supabase.from('expenses').select('count', { count: 'exact' }).limit(1);
     
-    if (error && error.code === '42P01') {
-      // Table doesn't exist error
-      console.error('Database tables do not exist yet. Please run the SQL setup script from MIGRATION-GUIDE.md in the Supabase SQL Editor.');
-      return { success: false, message: 'Database tables not found. Please create them using the SQL script in MIGRATION-GUIDE.md.' };
-    } else if (error) {
-      console.error('Error checking database:', error);
-      return { success: false, error };
+    if (error) {
+      const networkError = handleNetworkError(error, 'database initialization');
+      if (networkError.isNetworkError) {
+        return { success: false, message: networkError.message, isNetworkError: true };
+      }
+      
+      if (error.code === '42P01') {
+        // Table doesn't exist error
+        console.error('Database tables do not exist yet. Please run the SQL setup script from MIGRATION-GUIDE.md in the Supabase SQL Editor.');
+        return { success: false, message: 'Database tables not found. Please create them using the SQL script in MIGRATION-GUIDE.md.' };
+      } else {
+        console.error('Error checking database:', error);
+        return { success: false, error };
+      }
     }
     
     console.log('Supabase database tables exist and are ready to use.');
     return { success: true };
   } catch (error) {
+    const networkError = handleNetworkError(error, 'database initialization');
+    if (networkError.isNetworkError) {
+      return { success: false, message: networkError.message, isNetworkError: true };
+    }
+    
     console.error('Error initializing Supabase database:', error);
     return { success: false, error };
   }
@@ -61,6 +114,38 @@ export const expenseDB = {
     } catch (error) {
       console.error('Error getting all expenses:', error);
       return [];
+    }
+  },
+
+  // Get a single expense by ID
+  getById: async (id, userId) => {
+    if (!userId) throw new Error('User not authenticated');
+    
+    try {
+      const { data, error } = await supabase
+        .from('expenses')
+        .select('*')
+        .eq('id', id)
+        .eq('user_id', userId)
+        .single();
+        
+      if (error && error.code !== 'PGRST116') {
+        const networkError = handleNetworkError(error, 'getting expense by ID');
+        if (networkError.isNetworkError) {
+          console.warn(`Network error getting expense ${id}:`, networkError.message);
+          return null; // Return null for network errors to avoid breaking the integrity check
+        }
+        throw error;
+      }
+      return data;
+    } catch (error) {
+      const networkError = handleNetworkError(error, 'getting expense by ID');
+      if (networkError.isNetworkError) {
+        console.warn(`Network error getting expense ${id}:`, networkError.message);
+        return null;
+      }
+      console.error('Error getting expense by ID:', error);
+      return null;
     }
   },
   
@@ -520,6 +605,38 @@ export const tagDB = {
       return [];
     }
   },
+
+  // Get a single tag by ID
+  getById: async (id, userId) => {
+    if (!userId) throw new Error('User not authenticated');
+    
+    try {
+      const { data, error } = await supabase
+        .from('tags')
+        .select('*')
+        .eq('id', id)
+        .eq('user_id', userId)
+        .single();
+        
+      if (error && error.code !== 'PGRST116') {
+        const networkError = handleNetworkError(error, 'getting tag by ID');
+        if (networkError.isNetworkError) {
+          console.warn(`Network error getting tag ${id}:`, networkError.message);
+          return null; // Return null for network errors to avoid breaking the integrity check
+        }
+        throw error;
+      }
+      return data;
+    } catch (error) {
+      const networkError = handleNetworkError(error, 'getting tag by ID');
+      if (networkError.isNetworkError) {
+        console.warn(`Network error getting tag ${id}:`, networkError.message);
+        return null;
+      }
+      console.error('Error getting tag by ID:', error);
+      return null;
+    }
+  },
   
   // Add a new tag
   add: async (tag, userId) => {
@@ -530,6 +647,8 @@ export const tagDB = {
         ...(tag.id && { id: tag.id }), // If tag has an ID, include it for upsert
         name: tag.name.trim(),
         user_id: userId,
+        // Ensure color field is handled if it exists on the tag object
+        ...(tag.color && { color: tag.color }),
         last_modified: new Date().toISOString(),
         sync_status: 'synced' 
       };
@@ -567,11 +686,16 @@ export const tagDB = {
       if (fetchError) throw fetchError;
       if (!existingTag) throw new Error('Tag not found or unauthorized');
       
+      // Prepare update data with all relevant fields
+      const updateData = {
+        name: tag.name.trim(),
+        ...(tag.color && { color: tag.color }),
+        last_modified: new Date().toISOString()
+      };
+      
       const { data, error } = await supabase
         .from('tags')
-        .update({
-          name: tag.name
-        })
+        .update(updateData)
         .eq('id', tag.id)
         .eq('user_id', userId)
         .select()

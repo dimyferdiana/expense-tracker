@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { 
   categoryDB as supabaseCategoryDB, 
-  tagDB as supabaseTagDB 
+  tagDB as supabaseTagDB,
+  expenseDB as supabaseExpenseDB
 } from '../utils/supabase-db';
 import Badge from './Badge';
 import { colorClasses, getColorClasses, getColorName, availableColors } from '../utils/colors';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../hooks/useNotification';
 import { safeSetItem } from '../utils/safeStorage';
+import { markLocalChange } from '../utils/manualSyncManager';
+import DuplicateCleanup from './DuplicateCleanup';
 
 function ConfirmationModal({ open, onClose, onConfirm, title, message }) {
   if (!open) return null;
@@ -93,7 +96,7 @@ function CategoryModal({ open, onClose, onSave, category = null }) {
           </div>
         )}
         <div className="mb-4">
-          <label className="block mb-2 font-medium text-gray-300">Name</label>
+          <label className="block mb-2 font-medium text-gray-200">Name</label>
           <input
             type="text"
             value={name}
@@ -104,13 +107,13 @@ function CategoryModal({ open, onClose, onSave, category = null }) {
           />
         </div>
         <div className="mb-4">
-          <label className="block mb-2 font-medium text-gray-300">Preview</label>
+          <label className="block mb-2 font-medium text-gray-200">Preview</label>
           <div className="mb-4">
             <Badge color={color}>{name || 'Category Preview'}</Badge>
           </div>
         </div>
         <div className="mb-6">
-          <label className="block mb-2 font-medium text-gray-300">Color</label>
+          <label className="block mb-2 font-medium text-gray-200">Color</label>
           <div className="grid grid-cols-6 gap-2">
             {availableColors.map(colorName => (
               <button
@@ -190,7 +193,7 @@ function TagModal({ open, onClose, onSave, tag = null }) {
           </div>
         )}
         <div className="mb-4">
-          <label className="block mb-2 font-medium text-gray-300">Name</label>
+          <label className="block mb-2 font-medium text-gray-200">Name</label>
           <input
             type="text"
             value={name}
@@ -201,13 +204,13 @@ function TagModal({ open, onClose, onSave, tag = null }) {
           />
         </div>
         <div className="mb-4">
-          <label className="block mb-2 font-medium text-gray-300">Preview</label>
+          <label className="block mb-2 font-medium text-gray-200">Preview</label>
           <div className="mb-4">
             <Badge color={color}>{name || 'Tag Preview'}</Badge>
           </div>
         </div>
         <div className="mb-6">
-          <label className="block mb-2 font-medium text-gray-300">Color</label>
+          <label className="block mb-2 font-medium text-gray-200">Color</label>
           <div className="grid grid-cols-6 gap-2">
             {availableColors.map(colorName => (
               <button
@@ -247,6 +250,7 @@ function Settings({ dbInitialized = false }) {
   const [activeTab, setActiveTab] = useState('categories');
   const [categories, setCategories] = useState([]);
   const [tags, setTags] = useState([]);
+  const [expenses, setExpenses] = useState([]);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   
@@ -262,7 +266,7 @@ function Settings({ dbInitialized = false }) {
   const [confirmTitle, setConfirmTitle] = useState('');
   const [confirmMessage, setConfirmMessage] = useState('');
 
-  // Load categories and tags
+  // Load categories, tags, and expenses
   const loadData = async () => {
     try {
       if (dbInitialized && user) {
@@ -272,6 +276,9 @@ function Settings({ dbInitialized = false }) {
         // Load tags from Supabase
         const tagData = await supabaseTagDB.getAll(user.id);
         setTags(tagData);
+        // Load expenses for duplicate detection
+        const expenseData = await supabaseExpenseDB.getAll(user.id);
+        setExpenses(expenseData);
       } else {
         // Fallback to localStorage
         loadFromLocalStorage();
@@ -324,6 +331,14 @@ function Settings({ dbInitialized = false }) {
       ];
       setTags(defaultTags);
       safeSetItem('expense-tags', JSON.stringify(defaultTags));
+    }
+    
+    // Load expenses
+    const savedExpenses = localStorage.getItem('expenses');
+    if (savedExpenses) {
+      setExpenses(JSON.parse(savedExpenses));
+    } else {
+      setExpenses([]);
     }
   };
 
@@ -423,6 +438,9 @@ function Settings({ dbInitialized = false }) {
           setTags(updatedTags);
           safeSetItem('expense-tags', JSON.stringify(updatedTags));
         }
+        
+        // Mark that local data has changed
+        markLocalChange();
       } else {
         // Adding new tag
         const newTag = {
@@ -451,6 +469,9 @@ function Settings({ dbInitialized = false }) {
           setTags(updatedTags);
           safeSetItem('expense-tags', JSON.stringify(updatedTags));
         }
+        
+        // Mark that local data has changed
+        markLocalChange();
       }
       
       // Reload data to ensure we have the latest
@@ -513,6 +534,9 @@ function Settings({ dbInitialized = false }) {
         setTags(updatedTags);
         safeSetItem('expense-tags', JSON.stringify(updatedTags));
       }
+      
+      // Mark that local data has changed
+      markLocalChange();
       setShowConfirmModal(false);
     } catch (error) {
       console.error('Error deleting tag:', error);
@@ -558,6 +582,186 @@ function Settings({ dbInitialized = false }) {
     } catch (error) {
       console.error('Error cleaning up duplicates:', error);
       showError(`Failed to cleanup duplicates: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle delete all transactions
+  const handleDeleteAllTransactions = () => {
+    setConfirmTitle('Delete All Transactions');
+    setConfirmMessage(
+      `Are you sure you want to delete ALL ${expenses.length} transactions? This action cannot be undone and will permanently remove all your transaction history.`
+    );
+    setConfirmAction(() => performDeleteAllTransactions);
+    setShowConfirmModal(true);
+  };
+
+  const performDeleteAllTransactions = async () => {
+    try {
+      setIsLoading(true);
+      
+      if (dbInitialized && user) {
+        // Delete from Supabase
+        const allExpenses = await supabaseExpenseDB.getAll(user.id);
+        let deletedCount = 0;
+        
+        for (const expense of allExpenses) {
+          try {
+            await supabaseExpenseDB.delete(expense.id, user.id);
+            deletedCount++;
+          } catch (error) {
+            console.error(`Failed to delete expense ${expense.id}:`, error);
+          }
+        }
+        
+        showSuccess(`Successfully deleted ${deletedCount} transactions from cloud storage.`);
+      } else {
+        // Delete from localStorage
+        localStorage.removeItem('expenses');
+        showSuccess(`Successfully deleted ${expenses.length} transactions from local storage.`);
+      }
+      
+      // Clear the duplicate detection flag so it can run again if needed
+      if (user) {
+        const duplicateDetectionKey = `duplicateDetectionRun_${user.id}`;
+        sessionStorage.removeItem(duplicateDetectionKey);
+      }
+      
+      // Reload data
+      await loadData();
+      setShowConfirmModal(false);
+    } catch (error) {
+      console.error('Error deleting all transactions:', error);
+      showError('Failed to delete all transactions. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle reset all data
+  const handleResetAllData = () => {
+    setConfirmTitle('Reset All Data');
+    setConfirmMessage(
+      'Are you sure you want to reset ALL data? This will delete all transactions, categories, and tags, and restore default settings. This action cannot be undone.'
+    );
+    setConfirmAction(() => performResetAllData);
+    setShowConfirmModal(true);
+  };
+
+  const performResetAllData = async () => {
+    try {
+      setIsLoading(true);
+      
+      if (dbInitialized && user) {
+        // Delete from Supabase
+        const [allExpenses, allCategories, allTags] = await Promise.all([
+          supabaseExpenseDB.getAll(user.id),
+          supabaseCategoryDB.getAll(user.id),
+          supabaseTagDB.getAll(user.id)
+        ]);
+        
+        let deletedCount = 0;
+        
+        // Delete all expenses
+        for (const expense of allExpenses) {
+          try {
+            await supabaseExpenseDB.delete(expense.id, user.id);
+            deletedCount++;
+          } catch (error) {
+            console.error(`Failed to delete expense ${expense.id}:`, error);
+          }
+        }
+        
+        // Delete all categories (except default ones)
+        for (const category of allCategories) {
+          try {
+            await supabaseCategoryDB.delete(category.id, user.id);
+          } catch (error) {
+            console.error(`Failed to delete category ${category.id}:`, error);
+          }
+        }
+        
+        // Delete all tags
+        for (const tag of allTags) {
+          try {
+            await supabaseTagDB.delete(tag.id, user.id);
+          } catch (error) {
+            console.error(`Failed to delete tag ${tag.id}:`, error);
+          }
+        }
+        
+        showSuccess(`Successfully reset all data. Deleted ${deletedCount} transactions, ${allCategories.length} categories, and ${allTags.length} tags.`);
+      } else {
+        // Clear localStorage
+        localStorage.removeItem('expenses');
+        localStorage.removeItem('expense-categories');
+        localStorage.removeItem('expense-tags');
+        localStorage.removeItem('wallets');
+        localStorage.removeItem('transfers');
+        localStorage.removeItem('budgets');
+        localStorage.removeItem('recurring');
+        
+        showSuccess('Successfully reset all local data.');
+      }
+      
+      // Clear the duplicate detection flag
+      if (user) {
+        const duplicateDetectionKey = `duplicateDetectionRun_${user.id}`;
+        sessionStorage.removeItem(duplicateDetectionKey);
+      }
+      
+      // Reload data (this will restore defaults)
+      await loadData();
+      setShowConfirmModal(false);
+    } catch (error) {
+      console.error('Error resetting all data:', error);
+      showError('Failed to reset all data. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle export data
+  const handleExportData = async () => {
+    try {
+      setIsLoading(true);
+      
+      const exportData = {
+        timestamp: new Date().toISOString(),
+        version: '1.0',
+        user: user ? { id: user.id, email: user.email } : null,
+        storage: dbInitialized ? 'supabase' : 'localStorage',
+        data: {
+          expenses: expenses,
+          categories: categories,
+          tags: tags
+        },
+        statistics: {
+          totalTransactions: expenses.length,
+          totalCategories: categories.length,
+          totalTags: tags.length
+        }
+      };
+      
+      // Create and download the file
+      const dataStr = JSON.stringify(exportData, null, 2);
+      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(dataBlob);
+      
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `expense-tracker-export-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      URL.revokeObjectURL(url);
+      
+      showSuccess('Data exported successfully!');
+    } catch (error) {
+      console.error('Error exporting data:', error);
+      showError('Failed to export data. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -656,6 +860,18 @@ function Settings({ dbInitialized = false }) {
           onClick={() => setActiveTab('tags')}
         >
           Tags
+        </button>
+        <button
+          className={`py-2 px-4 font-medium ${activeTab === 'duplicates' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-gray-400 hover:text-gray-300'}`}
+          onClick={() => setActiveTab('duplicates')}
+        >
+          Duplicates
+        </button>
+        <button
+          className={`py-2 px-4 font-medium ${activeTab === 'data' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-gray-400 hover:text-gray-300'}`}
+          onClick={() => setActiveTab('data')}
+        >
+          Data Management
         </button>
       </div>
       
@@ -782,6 +998,102 @@ function Settings({ dbInitialized = false }) {
               ))}
             </ul>
           )}
+        </div>
+      )}
+
+      {/* Duplicates Tab */}
+      {activeTab === 'duplicates' && (
+        <DuplicateCleanup
+          expenses={expenses}
+          onCleanupComplete={loadData}
+          dbInitialized={dbInitialized}
+        />
+      )}
+
+      {/* Data Management Tab */}
+      {activeTab === 'data' && (
+        <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+          <div className="p-4 border-b border-gray-700">
+            <h3 className="text-lg font-medium text-white mb-2">Data Management</h3>
+            <p className="text-gray-400 text-sm">Manage your transaction data and perform bulk operations.</p>
+          </div>
+          
+          <div className="p-6 space-y-6">
+            {/* Transaction Statistics */}
+            <div className="bg-gray-700 rounded-lg p-4">
+              <h4 className="text-white font-medium mb-3">Transaction Statistics</h4>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-gray-400">Total Transactions:</span>
+                  <span className="text-white ml-2 font-medium">{expenses.length}</span>
+                </div>
+                <div>
+                  <span className="text-gray-400">Storage Type:</span>
+                  <span className="text-white ml-2 font-medium">{dbInitialized ? 'Cloud (Supabase)' : 'Local Storage'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Danger Zone */}
+            <div className="bg-red-900/20 border border-red-700 rounded-lg p-4">
+              <h4 className="text-red-400 font-medium mb-3 flex items-center">
+                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+                Danger Zone
+              </h4>
+              <p className="text-gray-300 text-sm mb-4">
+                These actions are permanent and cannot be undone. Please proceed with caution.
+              </p>
+              
+              <div className="space-y-3">
+                {/* Delete All Transactions */}
+                <div className="flex items-center justify-between p-3 bg-gray-800 rounded border border-gray-600">
+                  <div>
+                    <h5 className="text-white font-medium">Delete All Transactions</h5>
+                    <p className="text-gray-400 text-sm">Permanently remove all transaction records from your account.</p>
+                  </div>
+                  <button
+                    onClick={handleDeleteAllTransactions}
+                    disabled={expenses.length === 0 || isLoading}
+                    className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors duration-300"
+                  >
+                    {isLoading ? 'Processing...' : 'Delete All'}
+                  </button>
+                </div>
+
+                {/* Reset All Data */}
+                <div className="flex items-center justify-between p-3 bg-gray-800 rounded border border-gray-600">
+                  <div>
+                    <h5 className="text-white font-medium">Reset All Data</h5>
+                    <p className="text-gray-400 text-sm">Delete all transactions, categories, and tags. Reset to default state.</p>
+                  </div>
+                  <button
+                    onClick={handleResetAllData}
+                    disabled={isLoading}
+                    className="px-4 py-2 bg-red-700 text-white rounded hover:bg-red-800 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors duration-300"
+                  >
+                    {isLoading ? 'Processing...' : 'Reset All'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Export Data */}
+            <div className="bg-gray-700 rounded-lg p-4">
+              <h4 className="text-white font-medium mb-3">Export Data</h4>
+              <p className="text-gray-400 text-sm mb-4">
+                Download your transaction data as a JSON file for backup or migration purposes.
+              </p>
+              <button
+                onClick={handleExportData}
+                disabled={expenses.length === 0 || isLoading}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors duration-300"
+              >
+                {isLoading ? 'Exporting...' : 'Export Data'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

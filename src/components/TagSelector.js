@@ -1,9 +1,10 @@
-import React, { useState, forwardRef, useImperativeHandle, useEffect } from 'react';
+import React, { useState, forwardRef, useImperativeHandle } from 'react';
 import Badge from './Badge';
 import { tagDB as supabaseTagDB } from '../utils/supabase-db';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../hooks/useNotification';
 import { safeSetItem } from '../utils/safeStorage';
+import { markLocalChange } from '../utils/manualSyncManager';
 
 const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChange, dbInitialized = false, id }, ref) => {
   const { user } = useAuth();
@@ -130,6 +131,9 @@ const TagSelector = forwardRef(({ selectedTags = [], availableTags = [], onChang
         // Add to selected tags
         handleTagSelect(newTag);
       }
+      
+      // Mark that local data has changed
+      markLocalChange();
     } catch (error) {
       console.error("Error saving tag to database:", error);
       

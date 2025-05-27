@@ -56,7 +56,7 @@ export function NavbarLabel({ children, className = '' }) {
 }
 
 // Main Navbar component with authentication support
-const Navbar = ({ user, signOut, activeTab, setActiveTab, setIsModalOpen, className = '' }) => {
+const Navbar = ({ user, signOut, activeTab, setActiveTab, setIsModalOpen, hasUnsavedChanges = false, className = '' }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
 
@@ -103,6 +103,15 @@ const Navbar = ({ user, signOut, activeTab, setActiveTab, setIsModalOpen, classN
           <h1 className="text-xl font-bold text-indigo-400">
             ExpenseTracker
           </h1>
+          {/* Unsaved changes indicator */}
+          {hasUnsavedChanges && (
+            <div className="ml-3 flex items-center">
+              <div className="h-2 w-2 bg-yellow-500 rounded-full animate-pulse"></div>
+              <span className="ml-1 text-xs text-yellow-500 hidden sm:inline">
+                Unsaved changes
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Center Navigation (hidden on mobile) */}

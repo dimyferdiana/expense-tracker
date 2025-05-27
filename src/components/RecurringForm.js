@@ -333,7 +333,7 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
         <form onSubmit={handleSubmit}>
           {/* Transaction Name */}
           <div className="mb-4">
-            <label htmlFor="name" className="block text-gray-300 mb-1">Description</label>
+            <label htmlFor="name" className="block text-gray-200 mb-1">Description</label>
             <input
               type="text"
               id="name"
@@ -348,7 +348,7 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
           
           {/* Amount */}
           <div className="mb-4">
-            <label htmlFor="amount" className="block text-gray-300 mb-1">Amount</label>
+            <label htmlFor="amount" className="block text-gray-200 mb-1">Amount</label>
             <div className="relative">
               <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400">$</span>
               <input
@@ -368,7 +368,7 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
           
           {/* Category */}
           <div className="mb-4">
-            <ComboboxLabel htmlFor="category-select" className="block text-gray-300 mb-1">Category</ComboboxLabel>
+            <ComboboxLabel htmlFor="category-select" className="block text-gray-200 mb-1">Category</ComboboxLabel>
             <Combobox
               id="category-select"
               name="category"
@@ -399,7 +399,7 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
           
           {/* Wallet */}
           <div className="mb-4">
-            <ComboboxLabel htmlFor="wallet-select" className="block text-gray-300 mb-1">Wallet</ComboboxLabel>
+            <ComboboxLabel htmlFor="wallet-select" className="block text-gray-200 mb-1">Wallet</ComboboxLabel>
             <Combobox
               id="wallet-select"
               name="wallet"
@@ -419,7 +419,7 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
           
           {/* Frequency */}
           <div className="mb-4">
-            <ComboboxLabel htmlFor="frequency-select" className="block text-gray-300 mb-1">Frequency</ComboboxLabel>
+            <ComboboxLabel htmlFor="frequency-select" className="block text-gray-200 mb-1">Frequency</ComboboxLabel>
             <Combobox
               id="frequency-select"
               name="frequency"
@@ -439,7 +439,7 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
           
           {/* Start Date */}
           <div className="mb-4">
-            <label htmlFor="startDate" className="block text-gray-300 mb-1">Start Date</label>
+            <label htmlFor="startDate" className="block text-gray-200 mb-1">Start Date</label>
             <input
               type="text"
               id="startDate"
@@ -490,7 +490,7 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
           
           {/* End Date (Optional) */}
           <div className="mb-4">
-            <label htmlFor="endDate" className="block text-gray-300 mb-1">End Date (Optional)</label>
+            <label htmlFor="endDate" className="block text-gray-200 mb-1">End Date (Optional)</label>
             <input
               type="text"
               id="endDate"
@@ -541,7 +541,7 @@ function RecurringForm({ addRecurringTransaction, dbInitialized = false, onClose
           
           {/* Notes */}
           <div className="mb-4">
-            <label htmlFor="notes" className="block text-gray-300 mb-1">Notes (Optional)</label>
+            <label htmlFor="notes" className="block text-gray-200 mb-1">Notes (Optional)</label>
             <textarea
               id="notes"
               name="notes"

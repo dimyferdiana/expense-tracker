@@ -126,11 +126,14 @@ const VALIDATION_RULES = {
 };
 
 export class DataIntegrityManager {
-  constructor(userId = null) {
+  constructor(userId = null, useCloudDB = false) {
     this.userId = userId;
+    this.useCloudDB = useCloudDB;
     this.validationErrors = [];
     this.integrityIssues = [];
     this.autoFixEnabled = true;
+    this.failedFixes = new Map(); // Track failed fixes to avoid retrying too often
+    this.maxRetries = 3;
   }
 
   /**
@@ -434,12 +437,22 @@ export class DataIntegrityManager {
       attempted: 0,
       successful: 0,
       failed: 0,
+      skipped: 0,
       errors: []
     };
 
     const autoFixableIssues = issues.filter(issue => issue.autoFixable);
     
     for (const issue of autoFixableIssues) {
+      const issueKey = `${issue.type}_${issue.id}`;
+      const failureCount = this.failedFixes.get(issueKey) || 0;
+      
+      // Skip if we've already failed too many times
+      if (failureCount >= this.maxRetries) {
+        fixResults.skipped++;
+        continue;
+      }
+      
       fixResults.attempted++;
       
       try {
@@ -467,15 +480,28 @@ export class DataIntegrityManager {
         }
         
         fixResults.successful++;
-        console.log(`Auto-fixed issue: ${issue.type} for ID ${issue.id}`);
+        // Reset failure count on success
+        this.failedFixes.delete(issueKey);
+        
+        // Only log successful fixes occasionally to reduce console spam
+        if (fixResults.successful <= 5 || fixResults.successful % 10 === 0) {
+          console.log(`Auto-fixed issue: ${issue.type} for ID ${issue.id}`);
+        }
         
       } catch (error) {
         fixResults.failed++;
+        // Increment failure count
+        this.failedFixes.set(issueKey, failureCount + 1);
+        
         fixResults.errors.push({
           issue,
           error: error.message
         });
-        console.error(`Failed to auto-fix issue ${issue.type} for ID ${issue.id}:`, error);
+        
+        // Only log the first few failures to avoid spam
+        if (failureCount < 2) {
+          console.error(`Failed to auto-fix issue ${issue.type} for ID ${issue.id}:`, error);
+        }
       }
     }
 
@@ -518,20 +544,60 @@ export class DataIntegrityManager {
   }
 
   async fixOrphanedExpenseTag(expenseId) {
-    const expense = await localExpenseDB.getById(expenseId);
-    if (expense && expense.tags) {
-      // Remove invalid tags
-      const validTags = [];
-      for (const tag of expense.tags) {
-        const tagExists = await localTagDB.getById(tag);
-        if (tagExists) {
-          validTags.push(tag);
+    try {
+      const expenseDB = this.useCloudDB ? this.getCloudDB('expenses') : this.getLocalDB('expenses');
+      const tagDB = this.useCloudDB ? this.getCloudDB('tags') : this.getLocalDB('tags');
+      
+      // Get expense using appropriate method signature
+      let expense;
+      if (this.useCloudDB && this.userId) {
+        expense = await expenseDB.getById(expenseId, this.userId);
+      } else {
+        expense = await expenseDB.getById(expenseId);
+      }
+        
+      if (expense && expense.tags) {
+        // Remove invalid tags
+        const validTags = [];
+        for (const tag of expense.tags) {
+          try {
+            let tagExists;
+            if (this.useCloudDB && this.userId) {
+              tagExists = await tagDB.getById(tag, this.userId);
+            } else {
+              tagExists = await tagDB.getById(tag);
+            }
+            if (tagExists) {
+              validTags.push(tag);
+            }
+          } catch (tagError) {
+            // If we can't check the tag (e.g., network error), keep it to be safe
+            console.warn(`Could not verify tag ${tag}, keeping it:`, tagError.message);
+            validTags.push(tag);
+          }
+        }
+        
+        // Only update if tags actually changed
+        if (validTags.length !== expense.tags.length) {
+          expense.tags = validTags;
+          expense.last_modified = new Date().toISOString();
+          
+          if (this.useCloudDB && this.userId) {
+            await expenseDB.update(expense, this.userId);
+          } else {
+            await expenseDB.update(expense);
+          }
         }
       }
-      
-      expense.tags = validTags;
-      expense.last_modified = new Date().toISOString();
-      await localExpenseDB.update(expense);
+    } catch (error) {
+      // Don't throw errors for network issues during integrity fixes
+      if (error.message?.includes('NetworkError') || 
+          error.message?.includes('CORS') || 
+          error.message?.includes('fetch')) {
+        console.warn(`Network error during tag integrity fix for expense ${expenseId}, skipping:`, error.message);
+        return;
+      }
+      throw error;
     }
   }
 

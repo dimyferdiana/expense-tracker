@@ -52,6 +52,9 @@ import WalletRepair from './utils/walletRepair';
 import { useNotification } from './hooks/useNotification';
 import Onboarding from './components/Onboarding';
 import { useOnboarding } from './hooks/useOnboarding';
+import DuplicateDetector from './utils/duplicateDetection';
+// EMERGENCY: Stop all automatic sync processes immediately
+import './utils/stopAutomaticSync';
 
 // Emergency cleanup function with Arc browser detection
 const performEmergencyCleanup = () => {
@@ -250,6 +253,66 @@ const AppContent = () => {
   const [supabaseInitialized, setSupabaseInitialized] = useState(false);
   const [supabaseError, setSupabaseError] = useState(null);
   const [showSupabasePrompt, setShowSupabasePrompt] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+  // Check for unsaved changes on component mount
+  useEffect(() => {
+    const checkUnsavedChanges = () => {
+      const hasLocalChanges = localStorage.getItem('hasLocalChanges') === 'true';
+      const lastSyncTime = localStorage.getItem('lastSyncTime');
+      const now = Date.now();
+      const fiveMinutesAgo = now - (5 * 60 * 1000);
+      
+      // Consider changes unsaved if:
+      // 1. There are local changes marked
+      // 2. Last sync was more than 5 minutes ago
+      // 3. Supabase is not initialized (offline mode)
+      const isUnsaved = hasLocalChanges || 
+                       !lastSyncTime || 
+                       parseInt(lastSyncTime) < fiveMinutesAgo ||
+                       !supabaseInitialized;
+      
+      setHasUnsavedChanges(isUnsaved);
+    };
+
+    checkUnsavedChanges();
+    
+    // Check periodically
+    const interval = setInterval(checkUnsavedChanges, 30000); // Every 30 seconds
+    
+    return () => clearInterval(interval);
+  }, [supabaseInitialized]);
+
+  // Add beforeunload warning for unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (hasUnsavedChanges && supabaseInitialized) {
+        const message = 'You have unsaved changes that may not be synced to the cloud. Are you sure you want to leave?';
+        e.preventDefault();
+        e.returnValue = message;
+        return message;
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [hasUnsavedChanges, supabaseInitialized]);
+
+  // Mark changes as saved after successful operations
+  const markChangesSaved = () => {
+    setHasUnsavedChanges(false);
+    localStorage.removeItem('hasLocalChanges');
+    localStorage.setItem('lastSyncTime', Date.now().toString());
+  };
+
+  // Mark changes as unsaved
+  const markChangesUnsaved = () => {
+    setHasUnsavedChanges(true);
+    localStorage.setItem('hasLocalChanges', 'true');
+  };
 
   // Initialize database
   useEffect(() => {
@@ -262,7 +325,7 @@ const AppContent = () => {
           setSupabaseInitialized(supabaseResult.success);
           
           if (supabaseResult.success) {
-            await loadDataFromSupabase();
+            await loadDataFromSupabase({ runDuplicateDetection: true });
           } else {
             setSupabaseError(supabaseResult.message || 'Failed to initialize Supabase database');
             setShowSupabasePrompt(true);
@@ -282,7 +345,7 @@ const AppContent = () => {
   }, [user]);
 
   // Load expenses and categories from Supabase
-  const loadDataFromSupabase = async () => {
+  const loadDataFromSupabase = async (options = {}) => {
     try {
       if (!user) {
         console.error('Cannot load data: User not authenticated');
@@ -290,7 +353,38 @@ const AppContent = () => {
       }
       
       const expensesData = await supabaseExpenseDB.getAll(user.id);
-      setExpenses(expensesData);
+      
+      // Only run duplicate detection on initial load or when explicitly requested
+      // Use sessionStorage to track if duplicate detection has been run for this user session
+      const duplicateDetectionKey = `duplicateDetectionRun_${user.id}`;
+      const hasRunDuplicateDetection = sessionStorage.getItem(duplicateDetectionKey) === 'true';
+      
+      if (options.runDuplicateDetection && !hasRunDuplicateDetection) {
+        // Check for and remove duplicates
+        const duplicateGroups = DuplicateDetector.findDuplicates(expensesData);
+        if (duplicateGroups.length > 0) {
+          console.warn(`Found ${duplicateGroups.length} duplicate groups in loaded data:`, duplicateGroups);
+          
+          // Remove duplicates, keeping the most recent
+          const deduplicatedExpenses = DuplicateDetector.removeDuplicates(expensesData);
+          console.log(`Removed ${expensesData.length - deduplicatedExpenses.length} duplicate transactions`);
+          
+          setExpenses(deduplicatedExpenses);
+          
+          // Show notification about duplicates found only on initial load
+          if (duplicateGroups.length > 0) {
+            showError(`Found and removed ${expensesData.length - deduplicatedExpenses.length} duplicate transactions. Your data has been cleaned up.`);
+          }
+        } else {
+          setExpenses(expensesData);
+        }
+        
+        // Mark that duplicate detection has been run for this session
+        sessionStorage.setItem(duplicateDetectionKey, 'true');
+      } else {
+        // Just load the data without duplicate detection
+        setExpenses(expensesData);
+      }
       
       const categoriesData = await supabaseCategoryDB.getAll(user.id);
       setCategories(categoriesData);
@@ -302,8 +396,38 @@ const AppContent = () => {
     }
   };
 
-  const loadExpensesFromSupabase = async () => {
-    await loadDataFromSupabase();
+  const loadExpensesFromSupabase = async (options = {}) => {
+    await loadDataFromSupabase(options);
+  };
+
+  // Manual duplicate cleanup function (can be called from Settings)
+  const performDuplicateCleanup = async () => {
+    try {
+      if (!user) {
+        console.error('Cannot perform cleanup: User not authenticated');
+        return;
+      }
+      
+      const expensesData = await supabaseExpenseDB.getAll(user.id);
+      const duplicateGroups = DuplicateDetector.findDuplicates(expensesData);
+      
+      if (duplicateGroups.length > 0) {
+        const deduplicatedExpenses = DuplicateDetector.removeDuplicates(expensesData);
+        const removedCount = expensesData.length - deduplicatedExpenses.length;
+        
+        setExpenses(deduplicatedExpenses);
+        
+        showError(`Found and removed ${removedCount} duplicate transactions. Your data has been cleaned up.`);
+        return { success: true, removedCount };
+      } else {
+        showError('No duplicate transactions found.');
+        return { success: true, removedCount: 0 };
+      }
+    } catch (error) {
+      console.error('Error performing duplicate cleanup:', error);
+      showError('Failed to perform duplicate cleanup. Please try again.');
+      return { success: false, error: error.message };
+    }
   };
 
   // Fallback to localStorage if IndexedDB fails
@@ -342,6 +466,63 @@ const AppContent = () => {
       
       console.log('Adding expense with data:', expense);
       
+      // Get recently deleted transactions for duplicate checking
+      let recentlyDeleted = [];
+      try {
+        const { expenseDB: supabaseExpenseDB } = await import('./utils/supabase-db');
+        const allExpenses = await supabaseExpenseDB.getAllIncludingDeleted(user.id);
+        recentlyDeleted = allExpenses.filter(e => e.deleted_at);
+      } catch (error) {
+        console.warn('Could not fetch recently deleted transactions:', error);
+      }
+      
+      // Check for potential duplicates before adding (including recently deleted)
+      const duplicateCheck = DuplicateDetector.checkBeforeAdd(expense, expenses, recentlyDeleted);
+      
+      // Check for duplicates against recently deleted transactions
+      if (duplicateCheck.hasDeletedDuplicates) {
+        const deletedDuplicate = duplicateCheck.deletedDuplicates[0];
+        const deletedAt = new Date(deletedDuplicate.deletedAt).toLocaleString();
+        const reasons = deletedDuplicate.reasons.join(', ');
+        
+        console.warn('Transaction matches recently deleted duplicate:', deletedDuplicate);
+        
+        const proceed = window.confirm(
+          `⚠️ Warning: This transaction appears to be identical to one that was recently deleted.\n\n` +
+          `Deleted on: ${deletedAt}\n` +
+          `Reasons: ${reasons}\n\n` +
+          `This might be a duplicate that was cleaned up. Are you sure you want to add it again?`
+        );
+        
+        if (!proceed) {
+          console.log('User cancelled adding transaction that matches recently deleted duplicate');
+          return;
+        }
+      }
+      
+      // Check for duplicates against active transactions
+      if (duplicateCheck.hasDuplicates) {
+        const duplicateCount = duplicateCheck.duplicates.length;
+        const duplicateReasons = duplicateCheck.duplicates[0].reasons.join(', ');
+        
+        console.warn('Potential duplicate transaction detected:', duplicateCheck);
+        
+        // Show warning but allow user to proceed
+        const proceed = window.confirm(
+          `Warning: This transaction appears to be a duplicate of ${duplicateCount} existing transaction(s).\n\n` +
+          `Reasons: ${duplicateReasons}\n\n` +
+          `Do you want to add it anyway?`
+        );
+        
+        if (!proceed) {
+          console.log('User cancelled duplicate transaction');
+          return; // Don't add the transaction
+        }
+      }
+      
+      // Mark changes as unsaved before operation
+      markChangesUnsaved();
+      
       const walletOps = createWalletOperations(user);
       const result = await walletOps.addExpenseWithWalletUpdate(expense);
       
@@ -349,8 +530,12 @@ const AppContent = () => {
       
       setRefreshWallets(prev => prev + 1);
       await loadExpensesFromSupabase();
+      
+      // Mark changes as saved after successful operation
+      markChangesSaved();
     } catch (error) {
       console.error('Error adding expense:', error);
+      // Keep unsaved state on error
       throw error;
     }
   };
@@ -373,6 +558,9 @@ const AppContent = () => {
         }
       }
       
+      // Mark changes as unsaved before operation
+      markChangesUnsaved();
+      
       const walletOps = createWalletOperations(user);
       const result = await walletOps.updateExpenseWithWalletUpdate(updatedExpense);
       
@@ -380,6 +568,9 @@ const AppContent = () => {
       
       await loadExpensesFromSupabase();
       setRefreshWallets(prev => prev + 1);
+      
+      // Mark changes as saved after successful operation
+      markChangesSaved();
     } catch (error) {
       console.error('Error updating expense:', error);
       
@@ -431,6 +622,9 @@ const AppContent = () => {
         console.warn('Cleanup before delete failed:', cleanupError);
       }
       
+      // Mark changes as unsaved before operation
+      markChangesUnsaved();
+      
       const walletOps = createWalletOperations(user);
       const result = await walletOps.deleteExpenseWithWalletUpdate(id);
       
@@ -438,6 +632,9 @@ const AppContent = () => {
       
       await loadExpensesFromSupabase();
       setRefreshWallets(prev => prev + 1);
+      
+      // Mark changes as saved after successful operation
+      markChangesSaved();
     } catch (error) {
       console.error('Error deleting expense:', error);
       
@@ -570,7 +767,8 @@ const AppContent = () => {
         signOut={signOut} 
         activeTab={activeTab} 
         setActiveTab={setActiveTab} 
-        setIsModalOpen={setIsModalOpen} 
+        setIsModalOpen={setIsModalOpen}
+        hasUnsavedChanges={hasUnsavedChanges}
       />
 
       {/* Main content with TailwindCSS */}
